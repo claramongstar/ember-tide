@@ -45,6 +45,12 @@ export class Sim {
     this.events = events;
     this.rng = makeRng(seed * 31 + 7);
     this.colliders = world.colliders;
+    // City traffic and police patrol the city road segments only. The
+    // Sable Point connector (the one segment starting east of the gate)
+    // is excluded: a traffic car spawned there patrols inside the base
+    // forever, and a police unit spawned there is trapped behind the
+    // closed gate fence, ramming it while the player roams free.
+    this.cityRoads = world.roads.filter((r) => r.axis === 'z' || r.from < 0);
     this.vehicles = [];
     this.peds = [];
     this.time = 0;
@@ -185,7 +191,7 @@ export class Sim {
       const color = CAR_COLORS[i % CAR_COLORS.length];
       const model = await makeCar(color);
       const v = new VehicleEnt('car', model, CAR_NAMES[i % CAR_NAMES.length]);
-      const seg = this.world.roads[i % 6];
+      const seg = this.cityRoads[i % this.cityRoads.length];
       const dir = i % 2 ? 1 : -1;
       const t = 0.15 + (i % 5) * 0.16;
       this._placeOnSeg(v, seg, dir, t);
@@ -353,11 +359,11 @@ export class Sim {
       let nx = ch.position.x + Math.sin(p.heading) * speed * dt * Math.min(1, mag);
       let nz = ch.position.z + Math.cos(p.heading) * speed * dt * Math.min(1, mag);
       [nx, nz] = collideCircle(fc, nx, nz, 0.42);
-      // don't walk through vehicles
+      // don't walk through vehicles (the Kestrel's fuselage included —
+      // wings and tail still overhang the circle, but the body blocks)
       for (const v of this.vehicles) {
-        if (v.kind === 'jet') continue;
         const d = dist2d(nx, nz, v.pos.x, v.pos.z);
-        const r = v.kind === 'tank' ? 3.1 : 2.0;
+        const r = v.kind === 'tank' ? 3.1 : v.kind === 'jet' ? 2.7 : 2.0;
         if (d < r && d > 0.01) {
           nx = v.pos.x + (nx - v.pos.x) / d * r;
           nz = v.pos.z + (nz - v.pos.z) / d * r;
@@ -460,9 +466,13 @@ export class Sim {
   _updateDriving(dt, input) {
     const p = this.player;
     const v = p.vehicle;
-    if (input.interact) { if (Math.abs(v.speed) < 4 || v.kind === 'jet') { this.promptText = null; this.exitVehicle(); return; } }
+    // Exit rule: a car must be near-stopped, and the Kestrel only on the
+    // ground — bailing out mid-air used to teleport Raka to the street
+    // and leave the jet parked in the sky, unreachable for good.
+    const canExit = v.kind === 'jet' ? !!v.onGround : Math.abs(v.speed) < 4;
+    if (input.interact) { if (canExit) { this.promptText = null; this.exitVehicle(); return; } }
     // mirror the exit rule above: the prompt shows exactly when E works
-    this.promptText = (Math.abs(v.speed) < 4 || v.kind === 'jet') ? 'E — EXIT' : null;
+    this.promptText = canExit ? 'E — EXIT' : null;
     if (v.kind === 'jet') return this._updateJet(dt, input, v);
     const isTank = v.kind === 'tank';
     const maxF = isTank ? 9.5 : v.name === 'EMBER GT' ? 39 : 33;
@@ -497,11 +507,11 @@ export class Sim {
     v.group.rotation.y = v.heading;
     // vehicle vs vehicle
     for (const o of this.vehicles) {
-      if (o === v || o.kind === 'jet') continue;
+      if (o === v) continue;
       const d = dist2d(nx, nz, o.pos.x, o.pos.z);
-      const rr = (isTank ? 3.4 : 2.3) + (o.kind === 'tank' ? 3.4 : 2.3);
+      const rr = (isTank ? 3.4 : 2.3) + (o.kind === 'tank' ? 3.4 : o.kind === 'jet' ? 3.2 : 2.3);
       if (d < rr && d > 0.01) {
-        if (isTank || (v.kind !== 'tank' && o.kind !== 'tank' && Math.abs(v.speed) > 8)) {
+        if (o.kind !== 'jet' && (isTank || (v.kind !== 'tank' && o.kind !== 'tank' && Math.abs(v.speed) > 8))) {
           // shove the other vehicle; tanks simply roll through
           const push = (rr - d) * (isTank ? 0.9 : 0.4);
           o.group.position.x += (o.pos.x - nx) / d * push;
@@ -509,6 +519,16 @@ export class Sim {
           if (isTank) this.damageVehicle(o, 60 * dt * 8, 'crush');
           else this.damageVehicle(o, Math.abs(v.speed) * 0.3, 'crash');
           if (Math.abs(v.speed) > 12) this.crime(0.3, nx, nz);
+        } else {
+          // No shove — too slow, or the other hull is immovable (a tank,
+          // the parked Kestrel): treat it as a wall and back the player
+          // out. Without this branch a slow car ghosted clean through
+          // parked traffic, and anything could drive through the jet.
+          v.group.position.x = o.pos.x + (nx - o.pos.x) / d * rr;
+          v.group.position.z = o.pos.z + (nz - o.pos.z) / d * rr;
+          nx = v.group.position.x; nz = v.group.position.z;
+          if (Math.abs(v.speed) > 3) { this.damageVehicle(v, Math.abs(v.speed) * 0.3, 'crash'); v.speed *= -0.15; }
+          else v.speed *= 0.6;
         }
       }
     }
@@ -571,6 +591,10 @@ export class Sim {
       v.pos.z += fz * spd * dt;
       v.pos.y += fy * spd * dt - (spd < 21 ? (21 - spd) * dt * 0.85 : 0);
       if (v.pos.y > 170) v.pos.y = 170;
+      // the world ends at the fence lines: a jet that leaves it is lost
+      // in empty sky with nothing to land on — slide along the edge
+      v.pos.x = clamp(v.pos.x, -164, 270);
+      v.pos.z = clamp(v.pos.z, -114, 204);
       if (v.pos.y <= 0) {
         v.pos.y = 0;
         const flat = Math.abs(v.pitch) < 0.3 && Math.abs(v.roll) < 0.45;
@@ -654,6 +678,16 @@ export class Sim {
         const ahead = (o.pos.x - pos.x) * Math.sin(v.heading) + (o.pos.z - pos.z) * Math.cos(v.heading);
         const side = Math.abs((o.pos.x - pos.x) * Math.cos(v.heading) - (o.pos.z - pos.z) * Math.sin(v.heading));
         if (ahead > 0 && ahead < 9 && side < 2.4) gap = Math.min(gap, ahead);
+      }
+      // ...and to pedestrians: sidewalk lines cross every street at the
+      // corners, and traffic used to drive straight through the people
+      // crossing there (no brake, no hit — a ghost through a body)
+      for (const ped of this.peds) {
+        if (ped.state === 'down') continue;
+        const px = ped.char.position.x, pz = ped.char.position.z;
+        const ahead = (px - pos.x) * Math.sin(v.heading) + (pz - pos.z) * Math.cos(v.heading);
+        const side = Math.abs((px - pos.x) * Math.cos(v.heading) - (pz - pos.z) * Math.sin(v.heading));
+        if (ahead > 0 && ahead < 8 && side < 1.7) gap = Math.min(gap, ahead);
       }
       const targetSpeed = gap < 5 ? 0 : gap < 9 ? cruise * 0.45 : cruise;
       v.speed = lerp(v.speed, targetSpeed, dt * 2.2);
@@ -789,10 +823,11 @@ export class Sim {
     const model = await makePoliceCar();
     const v = new VehicleEnt('police', model, 'PORT AUTHORITY');
     const pp = this.playerPos();
-    // spawn on a road 65–95 m away from the player
-    const segs = this.world.roads;
+    // spawn on a road 65–95 m away from the player (city segments only —
+    // a unit spawning on the base connector is trapped behind the gate)
+    const segs = this.cityRoads;
     for (let tries = 0; tries < 10; tries++) {
-      const seg = segs[Math.floor(this.rng() * 6)];
+      const seg = segs[Math.floor(this.rng() * segs.length)];
       const along = this.rng.range(seg.from + 6, seg.to - 6);
       const p = this._lanePoint(seg, 1, along);
       const d = dist2d(p.x, p.z, pp.x, pp.z);
@@ -827,17 +862,21 @@ export class Sim {
         this.vehicles.splice(this.vehicles.indexOf(v), 1);
         continue;
       }
-      // pursuit: aim at a point just behind the player's motion
+      // pursuit: aim at a point just behind the player's motion. With no
+      // stars the heat is gone — the unit disengages and drives AWAY
+      // instead of ramming the player forever (the ram below was not
+      // star-gated, so a leftover unit hunted a clean player eternally)
+      const engaging = stars > 0;
       const pv = this.player.vehicle;
       const lead = pv ? pv.speed * 0.35 : 0;
-      const tx = pp.x + (pv ? Math.sin(pv.heading) * lead : 0);
-      const tz = pp.z + (pv ? Math.cos(pv.heading) * lead : 0);
+      const tx = engaging ? pp.x + (pv ? Math.sin(pv.heading) * lead : 0) : v.pos.x + (v.pos.x - pp.x);
+      const tz = engaging ? pp.z + (pv ? Math.cos(pv.heading) * lead : 0) : v.pos.z + (v.pos.z - pp.z);
       const wantH = Math.atan2(tx - v.pos.x, tz - v.pos.z);
       const dd = angleDelta(v.heading, wantH);
       v.heading = turnToward(v.heading, wantH, dt * 1.9);
-      let cruise = d > 40 ? 31 : d > 14 ? 24 : 13;
+      let cruise = !engaging ? 21 : d > 40 ? 31 : d > 14 ? 24 : 13;
       if (Math.abs(dd) > 0.6) cruise *= 0.55;
-      if (d < 5.5) cruise = 0;                       // arrived: block / engage
+      if (engaging && d < 5.5) cruise = 0;           // arrived: block / engage
       v.speed = lerp(v.speed, cruise, dt * (cruise > v.speed ? 1.4 : 3));
       let nx = v.pos.x + Math.sin(v.heading) * v.speed * dt;
       let nz = v.pos.z + Math.cos(v.heading) * v.speed * dt;
@@ -845,8 +884,8 @@ export class Sim {
       v.group.position.x = nx; v.group.position.z = nz;
       v.group.rotation.y = v.heading;
       if (v.model && v.model.roll) v.model.roll(v.speed * dt, clamp(dd, -0.4, 0.4));
-      // ram damage
-      if (d < 3.4 && Math.abs(v.speed) > 7) {
+      // ram damage (only while there is any heat to enforce)
+      if (engaging && d < 3.4 && Math.abs(v.speed) > 7) {
         if (pv) this.damageVehicle(pv, 7, 'ram');
         else this.damagePlayer(9, 'ram');
         v.speed *= 0.4;
@@ -899,12 +938,18 @@ export class Sim {
     }
     const pp = this.playerPos();
     for (const v of columns) {
-      // roll along Jalan Ombak toward the player's x, slowly and heavily
+      // roll along Jalan Ombak toward the player's x, slowly and heavily.
+      // Below 5 stars the deployment is over: the column rolls away from
+      // the player and melts off — it used to keep hunting and shelling
+      // a clean player forever, since nothing here was star-gated.
+      const engaging = stars >= 5;
       const dx = pp.x - v.pos.x;
-      const wantH = Math.abs(dx) > 6 ? (dx > 0 ? Math.PI / 2 : -Math.PI / 2) : v.heading;
+      const wantH = engaging
+        ? (Math.abs(dx) > 6 ? (dx > 0 ? Math.PI / 2 : -Math.PI / 2) : v.heading)
+        : (v.pos.x >= pp.x ? Math.PI / 2 : -Math.PI / 2);
       v.heading = turnToward(v.heading, wantH, dt * 0.5);
       const distP = Math.abs(dx);
-      v.speed = lerp(v.speed, distP > 16 ? 5.6 : 0, dt * 0.8);
+      v.speed = lerp(v.speed, engaging ? (distP > 16 ? 5.6 : 0) : 5.6, dt * 0.8);
       let nx = v.pos.x + Math.sin(v.heading) * v.speed * dt;
       let nz = v.pos.z + Math.cos(v.heading) * v.speed * dt;
       [nx, nz] = collideCircle(this.colliders, nx, nz, 2.6);
@@ -917,7 +962,7 @@ export class Sim {
       }
       v.fireCd -= dt;
       const d = dist2d(v.pos.x, v.pos.z, pp.x, pp.z);
-      if (v.fireCd <= 0 && d < 78 && d > 9) {
+      if (engaging && v.fireCd <= 0 && d < 78 && d > 9) {
         v.fireCd = this.rng.range(3.6, 5.2);
         if (!segmentBlocked(this.world.los, v.pos.x, v.pos.z, pp.x, pp.z)) {
           // shell lands near the player — terrifying, occasionally lethal
@@ -927,7 +972,7 @@ export class Sim {
           this.explosion(at, 6.5);
         }
       }
-      if (d > 220) { this.scene.remove(v.group); this.vehicles.splice(this.vehicles.indexOf(v), 1); }
+      if (d > 220 || (!engaging && d > 130)) { this.scene.remove(v.group); this.vehicles.splice(this.vehicles.indexOf(v), 1); }
     }
     // Kestrel flyovers at 5 stars (and a rare ambient one at 4)
     this.flyoverT -= dt;

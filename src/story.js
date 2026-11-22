@@ -254,8 +254,13 @@ export class Story {
     const w = this.world.places.workshop;
     if (this.ammoCd <= 0 && dist2d(pp.x, pp.z, w.x, w.z) < 7 && !p.vehicle) {
       let topped = false;
-      if (p.ammo.pistol > 0 && p.ammo.pistol < 60) { p.ammo.pistol = 60; topped = true; }
-      if (p.ammo.carbine > 0 && p.ammo.carbine < 120) { p.ammo.carbine = 120; topped = true; }
+      // The old "> 0" guards soft-locked an emptied weapon: at exactly 0
+      // shells Dario never refilled it, though the empty-gun toast sends
+      // the player to him. The pistol is owned from the first minute, so
+      // it always refills; the carbine only after Sinta's grant (mission
+      // 4 complete -> idx >= 4), so the top-up can't hand it out early.
+      if (p.ammo.pistol < 60) { p.ammo.pistol = 60; topped = true; }
+      if ((this.idx >= 4 || this.done) && p.ammo.carbine < 120) { p.ammo.carbine = 120; topped = true; }
       if (topped) { this.hud.toast('Dario topped up your ammo'); this.ammoCd = 20; }
     }
     // wandering into Sable Point early is a very bad idea

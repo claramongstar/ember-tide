@@ -1001,7 +1001,32 @@ export function buildWorld(scene, seed = 1) {
   }
 
   // ---- palms along the strand and avenues; lamps; bins ----
+  // Round-2 road audit: the palm rows run straight across the road network,
+  // so individual palms landed on asphalt — in the street channels where a
+  // row parallels a street, on the avenues where the street row crosses
+  // them, several exactly on zebra arms. Each moves to the nearest kerb /
+  // sidewalk spot on the same row (same palm, same seed, same look).
+  const PALM_FIX = new Map([
+    // strand south kerb (z=68.4): out of the street channels / zebra N-arms
+    ['-133,68.4', [-139.4, 68.4]], ['-75.5,68.4', [-83.4, 68.4]],
+    ['-18,68.4', [-27.4, 68.4]], ['39.5,68.4', [44.9, 68.4]],
+    // strand north kerb (z=83.6): out of the street spurs / zebra S-arms
+    ['-128,83.6', [-124.6, 83.6]], ['-82,83.6', [-83.4, 83.6]],
+    ['-70.5,83.6', [-66.9, 83.6]], ['-24.5,83.6', [-27.4, 83.6]],
+    ['-13,83.6', [-10.9, 83.6]], ['33,83.6', [28.6, 83.6]],
+    // Jalan Merak south kerb (z=-20.4)
+    ['-133,-20.4', [-139.4, -20.4]], ['-82,-20.4', [-83.4, -20.4]],
+    ['-14,-20.4', [-12.6, -20.4]], ['37,-20.4', [28.6, -20.4]],
+    // Jalan Cemara north kerb (z=20.4)
+    ['-125,20.4', [-124.6, 20.4]], ['-74,20.4', [-83.4, 20.4]],
+    ['-23,20.4', [-12.6, 20.4]],
+    // Jalan Cendana east kerb row (x=-12.4): off the avenues it crosses
+    ['-12.4,71', [-12.4, 66]], ['-12.4,33', [-12.4, 35.35]],
+    ['-12.4,-24', [-12.4, -20.65]], ['-12.4,-81', [-12.4, -76.65]],
+  ]);
   const palmAt = (x, z, seed) => {
+    const fix = PALM_FIX.get(`${x},${z}`);
+    if (fix) { x = fix[0]; z = fix[1]; }
     const p = veg.palm(6 + (Math.sin(seed * 12.9) * 0.5 + 0.5) * 3.6, seed);
     p.position.set(x, 0.1, z);
     p.rotation.y = seed * 1.7;
@@ -1029,6 +1054,13 @@ export function buildWorld(scene, seed = 1) {
   const lampGlowM = new THREE.MeshStandardMaterial({ color: 0xfff3d0, emissive: 0xffbe78, emissiveIntensity: 2.6 });
   const lampHeads = [];
   const lampAt = (x, z, flip) => {
+    // Round-2 road audit: the asphalt strips are 13.6 m wide, so the old
+    // ±6.4 kerb offset planted every pole ON the asphalt (and the avenue
+    // rows that cross a street centreline planted it mid-street). Callers
+    // now pass ±7.05 (clear of the asphalt edge and the zebra arms), and a
+    // pole that would land inside a street channel shifts east to that
+    // street's kerb corner.
+    for (const sx of STREETS) if (x > sx - 7.4 && x < sx + 7.4) x = sx + 7.4;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 4.8, 7), lampM);
     pole.position.set(x, 2.4, z); pole.castShadow = true; scene.add(pole);
     const arm = box(0.08, 0.08, 1.4, lampM, x, 4.75, z + flip * 0.65, scene);
@@ -1040,13 +1072,13 @@ export function buildWorld(scene, seed = 1) {
   };
   // Strand (avenue z=76): south palms every 11.5 from -156, north every 23
   // from -151 -> lamps on the gap midpoints (-150.25 + 23k / -139.5 + 23k).
-  for (let x = -150.25; x <= 84; x += 23) lampAt(x, 76 - 6.4, 1);
-  for (let x = -139.5; x <= 91; x += 23) lampAt(x, 76 + 6.4, -1);
+  for (let x = -150.25; x <= 84; x += 23) lampAt(x, 76 - 7.05, 1);
+  for (let x = -139.5; x <= 91; x += 23) lampAt(x, 76 + 7.05, -1);
   // Avenue -84: phase shifted +8 (was -140 + 32k) so no lamp hugs the
   // x=-20 street palm row — the old x=-12 lamp stood ~3.5 m from the palm
   // at (-12.4, -81). Avenue 28's north kerb has no palm row; unchanged.
-  for (let x = -132; x <= 60; x += 32) lampAt(x, -84 + 6.4, -1);
-  for (let x = -140; x <= 56; x += 32) lampAt(x + 16, 28 + 6.4, -1);
+  for (let x = -132; x <= 60; x += 32) lampAt(x, -84 + 7.05, -1);
+  for (let x = -140; x <= 56; x += 32) lampAt(x + 16, 28 + 7.05, -1);
   { // merged halos + light pools for every lamp head
     const haloGeos = [], poolGeos = [];
     for (const [hx, hz] of lampHeads) {
@@ -1071,7 +1103,10 @@ export function buildWorld(scene, seed = 1) {
     lampPoolMat = pools.material;
   }
   const binM = std(0x39543e, 0.8);
-  for (const [bx, bz] of [[-19.5, 82], [9.5, 70], [31, 82], [-70, 22], [44, 34]]) {
+  // Round-2 road audit: all five bins stood on avenue asphalt, two of them
+  // at crosswalk approaches in the street channels — each moves to the
+  // nearest kerb spot clear of asphalt, zebra and channel.
+  for (const [bx, bz] of [[-30.5, 83.15], [9.5, 68.8], [43.4, 83.15], [-68.3, 20.85], [45.6, 35.15]]) {
     const bin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.26, 0.75, 10), binM);
     bin.position.set(bx, 0.5, bz); bin.castShadow = true; scene.add(bin);
     colliders.push({ minX: bx - 0.3, maxX: bx + 0.3, minZ: bz - 0.3, maxZ: bz + 0.3 });
@@ -1082,7 +1117,12 @@ export function buildWorld(scene, seed = 1) {
     const stallM = std(0x8a6a4a, 0.9);
     const canopyCols = ['#b6492f', '#14666b', '#c9862b', '#5c7a3a'];
     for (let i = 0; i < 6; i++) {
-      const sx = -70 + i * 9.5, sz = 95;
+      // Round-2 road audit: the row crossed both street spurs that run to
+      // the pier — stall 1 clipped the Jalan Nelayan asphalt and stall 6
+      // stood squarely on Jalan Cendana (traffic drives both to z=98).
+      // The row now starts east of the west spur and is spaced to end
+      // clear of the east spur; same six stalls, same canopies.
+      const sx = -67.2 + i * 7.6, sz = 95;
       box(2.6, 0.08, 1.4, stallM, sx, 1.0, sz, scene);
       for (const [lx, lz] of [[-1.2, -0.6], [1.2, -0.6], [-1.2, 0.6], [1.2, 0.6]])
         box(0.07, 1.0, 0.07, stallM, sx + lx, 0.5, sz + lz, scene);
@@ -1329,8 +1369,13 @@ export function buildWorld(scene, seed = 1) {
     colliders.push({ minX: 110, maxX: 114, minZ: 90, maxZ: 94 });
   }
   // HQ + armoury + motor-pool sheds
-  addBaseBlock(120, -20, 20, 6, 12, 'HQ · SABLE POINT');
-  addBaseBlock(168, 66, 18, 5.5, 11, 'ARMOURY');
+  // Round-3 building audit (extending the round-2 road check): the HQ's
+  // north edge stood 4.8 m onto the Jalan Merak avenue strip and the
+  // armoury's south edge 2.3 m onto Jalan Ombak's — both blocks shift
+  // just clear of the paint (5 m / 3 m), contents and signs move with
+  // their groups, nothing else in the base references their positions.
+  addBaseBlock(120, -15, 20, 6, 12, 'HQ · SABLE POINT');
+  addBaseBlock(168, 63, 18, 5.5, 11, 'ARMOURY');
   addBaseBlock(126, 58, 16, 5, 10, 'MOTOR POOL');
   function addBaseBlock(bx, bz, w, h, d, label) {
     const b = box(w, h, d, oliveM, bx, h / 2, bz, scene);
@@ -1342,13 +1387,15 @@ export function buildWorld(scene, seed = 1) {
     const bc = { minX: bx - w / 2, maxX: bx + w / 2, minZ: bz - d / 2, maxZ: bz + d / 2 };
     colliders.push(bc); los.push(bc);
   }
-  // fuel drums + crates at the motor pool
+  // fuel drums + crates at the motor pool (round-3 audit: the stack stood
+  // on the Jalan Cemara avenue strip inside the base — it now sits on the
+  // pool slab's south edge, collider moved with it)
   for (let i = 0; i < 7; i++) {
-    const dx = 136 + (i % 4) * 1.1, dz = 30 + Math.floor(i / 4) * 1.1;
+    const dx = 136 + (i % 4) * 1.1, dz = 36.4 + Math.floor(i / 4) * 1.1;
     const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.92, 10), std(i % 2 ? 0x6e5136 : 0x4c5a48, 0.6, { metalness: 0.35 }));
     drum.position.set(dx, 0.52, dz); drum.castShadow = true; scene.add(drum);
   }
-  colliders.push({ minX: 135.6, maxX: 140.4, minZ: 29.6, maxZ: 31.6 });
+  colliders.push({ minX: 135.6, maxX: 140.4, minZ: 36.0, maxZ: 37.9 });
   // windsock (animated in update)
   const sock = new THREE.Group();
   {

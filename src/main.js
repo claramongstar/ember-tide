@@ -10,7 +10,7 @@ import { loadAssets, makeCar, makePoliceCar, makeTank, makeJet, setHeadlightGlow
 import { Sim, VehicleEnt } from './play.js';
 import { Story } from './story.js';
 import { Hud } from './hud.js';
-import { Events, clamp, angleDelta, turnToward } from './util.js';
+import { Events, clamp, angleDelta, turnToward, QualityController } from './util.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot');
@@ -29,6 +29,46 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.shadowMap.autoUpdate = false;
 $('app').appendChild(renderer.domElement);
+
+// ------------------------------------------------- adaptive quality --
+// Round 2: round 1's fixed caps were not enough on a weak iGPU at 1080p,
+// so quality now adapts live. The controller (util.js, pure logic) watches
+// smoothed FPS and steps tiers; this table is what a tier MEANS here.
+// Tier 0 is exactly the shipped round-1 look. ?shot= frames never adapt:
+// the controller is not even created, so staged renders stay bit-exact.
+const QT = [
+  { pr: Math.min(devicePixelRatio, 1.25), shadow: 768 },
+  { pr: 1.0, shadow: 768 },
+  { pr: 0.85, shadow: 512 },
+  { pr: 0.7, shadow: 0 }, // 0 = shadows off
+];
+const quality = SHOT ? null : new QualityController();
+let qShadowsOff = false;
+function applyQuality(t) {
+  const q = QT[t];
+  renderer.setPixelRatio(q.pr);
+  renderer.setSize(innerWidth, innerHeight);
+  if (!world || !world.sun) return;
+  const sun = world.sun;
+  const off = q.shadow === 0;
+  if (off !== qShadowsOff) {
+    qShadowsOff = off;
+    renderer.shadowMap.enabled = !off;
+    sun.castShadow = !off;
+    // Toggling the shadow map changes every shader's defines: flag all
+    // materials so they recompile (a one-frame hitch on a rare tier flip).
+    scene.traverse((o) => {
+      if (!o.material) return;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) m.needsUpdate = true;
+    });
+  }
+  if (!off && sun.shadow.mapSize.x !== q.shadow) {
+    sun.shadow.mapSize.set(q.shadow, q.shadow);
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } // force realloc at the new size
+  }
+}
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 900);
 addEventListener('resize', () => {
@@ -48,7 +88,9 @@ const keys = new Set();
 let fireHeld = false, firePressedEdge = false, interactEdge = false;
 
 function saveGame() {
-  if (!sim || !sim.player) return;
+  // Never persist a corpse: pausing inside the death window used to save
+  // health 0, and Continue then revived Raka at 0 HP (dead flag unsaved).
+  if (!sim || !sim.player || sim.player.dead) return;
   const data = {
     money: sim.player.money, health: sim.player.health, armour: sim.player.armour,
     ammo: sim.player.ammo, weapon: sim.player.weapon,
@@ -68,6 +110,11 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyE') interactEdge = true;
   if (e.code === 'Space') { firePressedEdge = true; e.preventDefault(); }
+  if (e.code === 'KeyQ' && quality) { // quality override: AUTO -> HIGH -> LOW
+    quality.cycleMode();
+    applyQuality(quality.tier);
+    if (hud) hud.toast(`QUALITY — ${quality.mode.toUpperCase()}`);
+  }
   if ((e.code === 'KeyP' || e.code === 'Escape') && mode === 'play') pauseGame();
   else if (e.code === 'Escape' && mode === 'pause') resumeGame();
   if (mode === 'play' && sim && sim.player) {
@@ -214,7 +261,18 @@ function onPlayerDead() {
   hud.banner('WASTED', 'PORT SARAYA GENERAL HOSPITAL');
   setTimeout(() => {
     const p = sim.player;
-    if (p.vehicle) { p.vehicle.driver = 'parked'; p.vehicle = null; }
+    if (p.vehicle) {
+      const v = p.vehicle;
+      v.driver = 'parked'; p.vehicle = null;
+      // A Kestrel abandoned mid-air stays frozen in the sky forever (only
+      // its pilot's update moves it). Put her back on the apron instead.
+      if (v.kind === 'jet' && !v.onGround) {
+        const jp = world.places.jetPark;
+        v.group.position.set(jp.x, 0, jp.z);
+        v.heading = jp.heading; v.group.rotation.set(0, jp.heading, 0);
+        v.onGround = true; v.pitch = 0; v.roll = 0; v.speed = 0; v.throttle = 0;
+      }
+    }
     p.char.group.visible = true;
     const h = world.places.hospital;
     p.char.group.position.set(h.x, 0, h.z);
@@ -462,6 +520,10 @@ function frame(now) {
   const rawDt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (mode === 'pause') { renderer.render(scene, camera); return; }
+  // Adaptive quality: feed every live frame (menu orbit included — it is
+  // the same city render, so the game pre-adapts before play starts).
+  // Paused frames are static and would lie about headroom, so they skip.
+  if (quality) { const t = quality.feed(rawDt); if (t >= 0) applyQuality(t); }
   const dt = rawDt * timeScale;
   // The day-night cycle: 1 game-minute per real second (a full day in 24
   // minutes of play). The clock runs in play and behind the menu; staged
