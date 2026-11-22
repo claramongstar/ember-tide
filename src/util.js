@@ -107,18 +107,24 @@ export function segmentBlocked(colliders, ax, az, bx, bz) {
  * tier 3 = shadows off).
  *
  * Behaviour: FPS is smoothed with an EMA (τ ≈ 0.45 s, ~1 s to settle).
- * Every 2.5 s evaluation window: a smoothed FPS under 45 steps the tier
- * DOWN at once; stepping back UP takes 3 consecutive windows above 57
- * (hysteresis, ~7.5 s of headroom) and never rises above the starting
+ * Every evaluation window (2.5 s by default): a smoothed FPS under 45
+ * steps the tier DOWN at once; stepping back UP takes 3 consecutive
+ * windows above 57 (hysteresis) and never rises above the starting
  * tier. Modes: 'auto' (controller live), 'high' (locked to the starting
  * tier), 'low' (locked to the low tier). feed() returns the new tier when
  * it changes, else -1.
+ *
+ * Round 5: the window length is a constructor option (`windowSec`) and
+ * the starting/low tiers are already parameters, so main.js can give
+ * touch devices a phone profile — start at a low tier, react faster —
+ * while desktop keeps the round-2 numbers exactly.
  */
 export class QualityController {
-  constructor({ startTier = 0, maxTier = 3, lowTier = 2 } = {}) {
+  constructor({ startTier = 0, maxTier = 3, lowTier = 2, windowSec = 2.5 } = {}) {
     this.startTier = startTier;
     this.maxTier = maxTier;
     this.lowTier = lowTier;
+    this.windowSec = windowSec;
     this.mode = 'auto';
     this.tier = startTier;
     this.ema = 60;
@@ -143,7 +149,7 @@ export class QualityController {
     const a = 1 - Math.exp(-dt / 0.45);
     this.ema += (fps - this.ema) * a;
     this.winT += dt;
-    if (this.winT < 2.5) return -1;
+    if (this.winT < this.windowSec) return -1;
     this.winT = 0;
     if (this.ema < 45) {
       this.upStreak = 0;

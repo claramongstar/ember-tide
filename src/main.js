@@ -15,6 +15,11 @@ import { Events, clamp, angleDelta, turnToward, QualityController } from './util
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot');
 const SEED = Number(params.get('seed') || 1);
+// Touch hardware, detected once (round 4's expression, hoisted in round
+// 5 so the quality profile below can use it too). Never true in ?shot=
+// mode, so staged frames stay bit-exact on every device.
+const IS_TOUCH = !SHOT && (('ontouchstart' in window)
+  || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
 const TEST = params.get('test') === '1';
 const SAVE_KEY = 'ember-tide-save-v1';
 
@@ -42,7 +47,18 @@ const QT = [
   { pr: 0.85, shadow: 512 },
   { pr: 0.7, shadow: 0 }, // 0 = shadows off
 ];
-const quality = SHOT ? null : new QualityController();
+// Round 5 phone profile: the owner's phone stuttered through the first
+// seconds of play because AUTO started at tier 0 and needed ~7 s of
+// windows to step down. On touch hardware the controller instead STARTS
+// at tier 2 (pixelRatio 0.85, 512 shadow map — the tier table above),
+// evaluates every 1.2 s so the floor (tier 3, shadows off) lands fast
+// if the phone is still struggling, and treats tier 3 as its LOW lock.
+// Step-up hysteresis still applies but can never climb above tier 2, so
+// a phone never wanders back into the heavy tiers mid-session. Desktop
+// constructs the round-2 controller unchanged.
+const quality = SHOT ? null : IS_TOUCH
+  ? new QualityController({ startTier: 2, lowTier: 3, windowSec: 1.2 })
+  : new QualityController();
 let qShadowsOff = false;
 function applyQuality(t) {
   const q = QT[t];
@@ -154,17 +170,24 @@ function readInput() {
   let steer = left - right;
   let run = k('ShiftLeft') || k('ShiftRight');
   // Round 4 touch: the analog stick folds into the same channels the keys
-  // feed — camera-relative move vector (magnitude preserved, so a gentle
-  // push walks slowly), throttle/steer for vehicles, and a push past 0.85
-  // reads as holding Shift (run). touchState is all-zero unless a stick
-  // is live, so keyboard/mouse play is bit-identical.
+  // feed — camera-relative move vector, throttle/steer for vehicles, and
+  // a hard push reads as holding Shift (run). touchState is all-zero
+  // unless a stick is live, so keyboard/mouse play is bit-identical.
+  // Round 5 feel: on a phone the stick's travel is short, so raw
+  // magnitude left Raka ambling ("letoy") and almost never running. The
+  // ON-FOOT vector now goes through a response curve — magnitude^0.65 —
+  // so a half push already walks confidently (0.5 -> 0.64 of walk speed)
+  // and the run threshold drops from 0.85 to 0.7 of travel. The curve
+  // scales the move vector only: throttle/steer (vehicles) and the jet
+  // channels below keep the raw stick, and no speed constant changes.
   const ts = touchState;
   if (ts.mag > 0.12) {
-    moveX = fx * -ts.y + rx * ts.x;
-    moveZ = fz * -ts.y + rz * ts.x;
+    const cs = Math.pow(ts.mag, 0.65) / ts.mag; // curve scale, direction preserved
+    moveX = (fx * -ts.y + rx * ts.x) * cs;
+    moveZ = (fz * -ts.y + rz * ts.x) * cs;
     throttle = -ts.y;
     steer = -ts.x;
-    if (ts.mag > 0.85) run = true;
+    if (ts.mag > 0.7) run = true;
   }
   const inJet = sim && sim.player && sim.player.vehicle && sim.player.vehicle.kind === 'jet';
   const input = {
@@ -210,8 +233,7 @@ function readInput() {
 // wired only on touch hardware and never in ?shot= mode, so desktop play
 // and the staged frames stay exactly as shipped. With no mouse to idle,
 // the camera's existing idle-settle keeps it behind Raka / his vehicle.
-const TOUCH_UI = !SHOT && (('ontouchstart' in window)
-  || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
+const TOUCH_UI = IS_TOUCH;
 const touchState = { x: 0, y: 0, mag: 0, fire: false };
 const touchUiEl = TOUCH_UI ? $('touchui') : null;
 function syncTouchUi() {
@@ -556,7 +578,13 @@ async function boot() {
     $('loadmsg').textContent = `ROLLING INTO PORT SARAYA… ${name.toUpperCase()} ${done}/${total}`;
   });
   world = buildWorld(scene, SEED);
-  sim = new Sim(scene, world, events, SEED);
+  // Round 5: on touch, far crowds animate at ~5.5 Hz instead of ~11 Hz
+  // (the Sim's far-ped slice interval doubles); desktop passes the
+  // shipped 0.09 s. The phone quality profile likewise applies its
+  // starting tier now that the sun exists — desktop starts at tier 0,
+  // which the renderer already matches, so it is left untouched.
+  sim = new Sim(scene, world, events, SEED, IS_TOUCH ? 0.18 : 0.09);
+  if (quality && IS_TOUCH) applyQuality(quality.tier);
   story = new Story(sim, world, hud, events);
   await sim.spawnPlayer();
   await sim.spawnPeds(13);

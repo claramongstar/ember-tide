@@ -39,10 +39,11 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 
 export class Sim {
-  constructor(scene, world, events, seed = 1) {
+  constructor(scene, world, events, seed = 1, farAnimInterval = 0.09) {
     this.scene = scene;
     this.world = world;
     this.events = events;
+    this.farAnimInterval = farAnimInterval; // far-ped anim slice, see _pedAnim
     this.rng = makeRng(seed * 31 + 7);
     this.colliders = world.colliders;
     // City traffic and police patrol the city road segments only. The
@@ -700,13 +701,15 @@ export class Sim {
 
   // ------------------------------------------------------------- peds --
   /** Far-away crowds don't need 60 Hz skeletons: beyond ~85 m their mixers
-   *  advance in ~11 Hz slices. Movement still runs every frame, so nothing
-   *  drifts or pops — only the (unreadable, at that range) limb motion is
-   *  sampled coarser. A real saving on integrated GPUs/CPUs. */
+   *  advance in slices of `farAnimInterval` seconds (~11 Hz at the 0.09 s
+   *  default; round 5 passes 0.18 s on touch devices, ~5.5 Hz, where the
+   *  CPU saving matters most). Movement still runs every frame, so
+   *  nothing drifts or pops — only the (unreadable, at that range) limb
+   *  motion is sampled coarser. A real saving on integrated GPUs/CPUs. */
   _pedAnim(ped, dt, far) {
     if (!far) { ped.char.update(dt); return; }
     ped.animAcc = (ped.animAcc || 0) + dt;
-    if (ped.animAcc >= 0.09) { ped.char.update(ped.animAcc); ped.animAcc = 0; }
+    if (ped.animAcc >= this.farAnimInterval) { ped.char.update(ped.animAcc); ped.animAcc = 0; }
   }
   _updatePeds(dt) {
     const pp = this.playerPos();
