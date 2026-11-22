@@ -4,7 +4,7 @@
 // file; missions live in story.js and steer everything through events.
 
 import * as THREE from 'three';
-import { makeCharacter, makeCar, makePoliceCar, makeTank, makeJet, updateLightBar, PED_MODELS } from './actors.js';
+import { makeCharacter, makeCar, makePoliceCar, makeTank, makeJet, updateLightBar, PED_MODELS, setupSeated, applySeated } from './actors.js';
 import { clamp, lerp, turnToward, angleDelta, collideCircle, segmentBlocked, dist2d, makeRng } from './util.js';
 import { AVENUES, STREETS } from './world.js';
 
@@ -54,6 +54,7 @@ export class Sim {
     this.cityRoads = world.roads.filter((r) => r.axis === 'z' || r.from < 0);
     this.vehicles = [];
     this.peds = [];
+    this.seated = [];
     this.time = 0;
     this.shake = 0;
     this.wanted = 0;                     // heat 0..~5.9; stars = ceil
@@ -175,6 +176,47 @@ export class Sim {
       ch.play('Walk');
     }
   }
+  /** Round 9: bench sitters at Taman Ombak — pure scenery. The three
+   *  benches (world.js) have no colliders and stand on park grass, off the
+   *  street sidewalks, so the figures block nothing. No AI and no entry in
+   *  peds[] (combat, scares and explosions ignore them); the Idle clip
+   *  still breathes, advanced at the far-anim slice rate like distant
+   *  peds, with the static sitting pose re-applied after each advance. */
+  async spawnSeated() {
+    const defs = [
+      { model: 'woman', h: 1.68, x: -110.55, z: 50, face: 0 },        // bench 1: toward the strand
+      { model: 'farmer', h: 1.74, x: -109.45, z: 50, face: 0.18 },
+      { model: 'suit', h: 1.78, x: -98.5, z: 56, face: Math.PI },     // bench 2: into the park
+      { model: 'casual', h: 1.7, x: -97.4, z: 56, face: Math.PI - 0.22 },
+      { model: 'worker', h: 1.76, x: -104.5, z: 42, face: -0.12 },    // bench 3: toward the strand
+      { model: 'woman', h: 1.66, x: -103.4, z: 42, face: 0.1 },
+    ];
+    for (const d of defs) {
+      const ch = await makeCharacter(d.model, d.h);
+      // the group origin sits ~0.09 behind the pelvis: nudge the figure
+      // so its hips land over the seat slab, not on its front edge
+      ch.group.position.set(d.x + Math.sin(d.face) * 0.09, 0, d.z + Math.cos(d.face) * 0.09);
+      ch.group.rotation.y = d.face;
+      ch.play('Idle');
+      setupSeated(ch);
+      ch.update(0.05);
+      applySeated(ch);
+      this.scene.add(ch.group);
+      this.seated.push({ char: ch, animAcc: Math.random() * 0.09 });
+    }
+  }
+
+  _updateSeated(dt) {
+    for (const s of this.seated) {
+      s.animAcc += dt;
+      if (s.animAcc >= this.farAnimInterval) {
+        s.char.update(s.animAcc);
+        s.animAcc = 0;
+        applySeated(s.char);
+      }
+    }
+  }
+
   _sidewalkSpots() {
     const spots = [];
     for (const z of AVENUES) for (let x = -150; x <= 70; x += 26) {
@@ -279,6 +321,7 @@ export class Sim {
     else this._updateOnFoot(dt, input);
     this._updateTraffic(dt);
     this._updatePeds(dt);
+    this._updateSeated(dt);
     this._updatePolice(dt);
     this._updateMilitary(dt);
     this._separateVehicles();
@@ -329,6 +372,7 @@ export class Sim {
     this.time += dt;
     if (this.player) this.player.char.update(dt);
     for (const ped of this.peds) ped.char.update(dt);
+    this._updateSeated(dt);
     for (const v of this.vehicles) {
       if (v.kind === 'tank') v.model.update(dt);
       if (v.group.userData.lightBar) updateLightBar(v.group, this.time);
@@ -707,10 +751,15 @@ export class Sim {
       if (v.driver !== 'traffic' || v.destroyed) continue;
       const tr = v.traffic;
       const pos = v.pos;
+      // Round 9 escape, phase 1: a wedged car reverses out under its own
+      // power (see the stuck block at the bottom of this method).
+      if (tr.esc && tr.esc.phase === 1) { this._trafficReverse(dt, v, tr); continue; }
+      if (tr.esc) { tr.esc.t += dt; if (tr.esc.t > 7) tr.esc = null; } // phase-2 watchdog
       let target;
       if (tr.turnTarget && dist2d(pos.x, pos.z, tr.turnTarget.x, tr.turnTarget.z) < 5) {
         if (tr.pendingSeg) { tr.seg = tr.pendingSeg.seg; tr.dir = tr.pendingSeg.dir; tr.pendingSeg = null; }
         tr.turnTarget = null;
+        if (tr.esc && tr.esc.phase === 2) tr.esc = null;
       }
       if (tr.turnTarget) {
         target = tr.turnTarget;
@@ -776,18 +825,99 @@ export class Sim {
       // lane-parked car) would anchor a permanent queue. A car that has
       // barely moved for 14 s AND is far from the player is quietly
       // recycled onto a fresh city segment; near the player nothing pops.
+      //
+      // Round 9: the round-7 rule left one hole — a queue that forms IN
+      // VIEW of the player (nose-to-tail behind his own stopped car, or
+      // a junction standoff) never cleared, because the only remedy was
+      // the >60 m teleport. Measured pre-fix: cars frozen at hull-sum
+      // distance (4.6 m) from the player's car for 80+ s. Two remedies:
+      // (1) the recycle may now also fire near the player for a car he
+      // cannot actually see (behind him, occluded by a building, or
+      // beyond 45 m), and (2) a car he CAN see performs an escape
+      // manoeuvre instead: reverse out, flip direction, arc away on the
+      // opposite lane. A queue unwinds tail-first — the tail car has a
+      // clear rear, escapes, then the next car's rear is clear — so any
+      // near-player jam fully dissolves within ~45 s worst case.
       if (Math.abs(v.speed) < 0.3) {
         tr.stuckT = (tr.stuckT || 0) + dt;
-        if (tr.stuckT > 14) {
-          const pp = this.playerPos();
-          if (dist2d(pos.x, pos.z, pp.x, pp.z) > 60) {
-            const seg2 = this.cityRoads[Math.floor(this.rng() * this.cityRoads.length)];
-            const dir2 = this.rng() < 0.5 ? 1 : -1;
-            this._placeOnSeg(v, seg2, dir2, 0.15 + this.rng() * 0.7);
-            v.traffic = { seg: seg2, dir: dir2, turnTarget: null, lastJunction: '', stuckT: 0 };
-          }
+        const pp = this.playerPos();
+        const dPlayer = dist2d(pos.x, pos.z, pp.x, pp.z);
+        if (tr.stuckT > 14 && (dPlayer > 60 || !this._playerCanSee(pos.x, pos.z))) {
+          const seg2 = this.cityRoads[Math.floor(this.rng() * this.cityRoads.length)];
+          const dir2 = this.rng() < 0.5 ? 1 : -1;
+          this._placeOnSeg(v, seg2, dir2, 0.15 + this.rng() * 0.7);
+          v.traffic = { seg: seg2, dir: dir2, turnTarget: null, lastJunction: '', stuckT: 0 };
+        } else if (tr.stuckT > 7 && !tr.esc && this._rearClear(v, 7)) {
+          tr.esc = { phase: 1, t: 0 };
+          tr.stuckT = 0;
         }
       } else tr.stuckT = 0;
+    }
+  }
+
+  /** Round 9: could the player actually see this point right now?
+   *  Beyond 45 m, in the rear hemisphere (beyond point-blank), or
+   *  occluded by a building (the same LOS segments the camera uses),
+   *  a car may be recycled without any visible pop. */
+  _playerCanSee(x, z) {
+    if (!this.player) return false;
+    const pp = this.playerPos();
+    const dx = x - pp.x, dz = z - pp.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 45) return false;
+    if (d > 6) {
+      const pv = this.player.vehicle;
+      const hd = pv ? pv.heading : this.player.heading;
+      if ((dx * Math.sin(hd) + dz * Math.cos(hd)) / d <= 0) return false;
+    }
+    return !segmentBlocked(this.world.los, pp.x, pp.z, x, z);
+  }
+
+  /** Round 9: is the space behind a traffic car (in its heading frame)
+   *  free of vehicles and pedestrians for `dist` metres? */
+  _rearClear(v, dist) {
+    const pos = v.pos;
+    const sh = Math.sin(v.heading), ch = Math.cos(v.heading);
+    for (const o of this.vehicles) {
+      if (o === v || o.kind === 'jet') continue;
+      const ahead = (o.pos.x - pos.x) * sh + (o.pos.z - pos.z) * ch;
+      const side = Math.abs((o.pos.x - pos.x) * ch - (o.pos.z - pos.z) * sh);
+      if (ahead < 0 && ahead > -dist && side < 2.4) return false;
+    }
+    for (const ped of this.peds) {
+      if (ped.state === 'down') continue;
+      const ahead = (ped.char.position.x - pos.x) * sh + (ped.char.position.z - pos.z) * ch;
+      const side = Math.abs((ped.char.position.x - pos.x) * ch - (ped.char.position.z - pos.z) * sh);
+      if (ahead < 0 && ahead > -(dist - 1.5) && side < 1.7) return false;
+    }
+    return true;
+  }
+
+  /** Round 9 escape, phase 1: reverse straight at 2.2 m/s for up to
+   *  ~1.6 s (cut short if something closes in behind), then flip the
+   *  car's direction on its segment and hand back to the normal traffic
+   *  logic with a target down the opposite lane — it arcs away like a
+   *  driver who gives up on a blocked street and turns around. */
+  _trafficReverse(dt, v, tr) {
+    const esc = tr.esc;
+    const pos = v.pos;
+    esc.t += dt;
+    v.speed = -2.2;
+    let nx = pos.x - Math.sin(v.heading) * 2.2 * dt;
+    let nz = pos.z - Math.cos(v.heading) * 2.2 * dt;
+    [nx, nz] = collideCircle(this.colliders, nx, nz, 1.7);
+    pos.x = nx; pos.z = nz;
+    v.group.rotation.y = v.heading;
+    if (v.model && v.model.roll) v.model.roll(v.speed * dt, 0);
+    if (esc.t > 0.35 && !this._rearClear(v, 3.4)) esc.t = 99;
+    if (esc.t >= 1.6) {
+      tr.dir *= -1;
+      const alongNow = tr.seg.axis === 'x' ? pos.x : pos.z;
+      tr.turnTarget = this._lanePoint(tr.seg, tr.dir, alongNow + tr.dir * 14);
+      tr.pendingSeg = null;
+      tr.lastJunction = '';
+      esc.phase = 2; esc.t = 0;
+      v.speed = 0;
     }
   }
 

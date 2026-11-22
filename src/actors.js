@@ -125,6 +125,80 @@ export async function makeCharacter(model, height = 1.76) {
 }
 
 // ---------------------------------------------------------------------------
+// Seated pose (round 9). The CC0 clip set has no sitting animation, so bench
+// figures are posed on the rig after every mixer update. This rig's legs are
+// UpperLeg -> LowerLeg -> _end (the ankle); the Foot bones hang off the
+// armature Root on their own (the walk clips plant them per-frame), so a
+// posed leg must have its foot bones translated onto the posed ankle.
+// Pitches are applied as WORLD-axis rotations about the character's lateral
+// axis: the bones' local axes are rolled by the bind pose, so a naive
+// local-X rotation swings the leg sideways (measured in the round-9 probe).
+// ---------------------------------------------------------------------------
+const _sq1 = new THREE.Quaternion(), _sq2 = new THREE.Quaternion(), _sq3 = new THREE.Quaternion(), _sq4 = new THREE.Quaternion();
+const _sv1 = new THREE.Vector3(), _sv2 = new THREE.Vector3();
+function _pitchBoneWorld(bone, groupQ, theta) {
+  _sv1.set(1, 0, 0).applyQuaternion(groupQ);            // character's lateral axis, in world space
+  _sq1.setFromAxisAngle(_sv1, theta);
+  bone.parent.getWorldQuaternion(_sq2);
+  bone.getWorldQuaternion(_sq3);
+  bone.quaternion.copy(_sq2.invert().multiply(_sq1).multiply(_sq3));
+}
+/** Cache the bones applySeated() needs on the character. Call once. */
+export function setupSeated(char) {
+  const B = {};
+  char.group.traverse((o) => { if (o.name) B[o.name] = o; });
+  char.seat = {
+    hips: B.Hips, thighL: B.UpperLegL, thighR: B.UpperLegR,
+    shinL: B.LowerLegL, shinR: B.LowerLegR,
+    ankleL: B.LowerLegL_end, ankleR: B.LowerLegR_end,
+    footL: B.FootL, footR: B.FootR, toeL: B.PTL, toeR: B.PTR,
+    // the clips carry NO Hips position track (measured: a mixer update
+    // leaves Hips.position untouched), so the pelvis drop below must be
+    // written as an absolute offset from this rest value — a decrement
+    // would accumulate one drop per anim slice and sink the figure
+    hipsRestY: B.Hips ? B.Hips.position.y : 0,
+  };
+  return char.seat;
+}
+const SEAT_THIGH = -0.85, SEAT_SHIN = 0.77, SEAT_DROP = 0.25;
+/** Re-apply the sitting pose. Call AFTER char.update() every time the
+ *  mixer advances — the clip rewrites every bone, so the pose is a
+ *  post-pass: thighs pitched forward to near-horizontal, shins back to
+ *  near-vertical, pelvis dropped onto the bench (seat top 0.54 m), and
+ *  the free foot/toe bones translated onto the posed ankles. The torso,
+ *  arms and head keep the Idle clip, so the figure still breathes.
+ *  The pitch constants were tuned empirically on the production path
+ *  (the rig's response is not the naive one — more negative thigh pitch
+ *  RAISES the knee past a point): at THIGH -0.85 / SHIN +0.77 the knee
+ *  sits +0.07 over the pelvis with the shin hanging vertical and the
+ *  ankle ~0.17 m over the ground, shoe soles just kissing the grass. */
+export function applySeated(char) {
+  const s = char.seat;
+  if (!s || !s.hips) return;
+  char.group.getWorldQuaternion(_sq4);
+  _pitchBoneWorld(s.thighL, _sq4, SEAT_THIGH);
+  _pitchBoneWorld(s.thighR, _sq4, SEAT_THIGH);
+  _pitchBoneWorld(s.shinL, _sq4, SEAT_SHIN);
+  _pitchBoneWorld(s.shinR, _sq4, SEAT_SHIN);
+  s.hips.parent.getWorldScale(_sv1);
+  s.hips.position.y = s.hipsRestY - SEAT_DROP / _sv1.y;
+  char.group.updateMatrixWorld(true);
+  for (const [ankle, foot, toe] of [[s.ankleL, s.footL, s.toeL], [s.ankleR, s.footR, s.toeR]]) {
+    if (!ankle || !foot) continue;
+    _sv1.setFromMatrixPosition(ankle.matrixWorld);
+    _sv2.setFromMatrixPosition(foot.matrixWorld);
+    _sv1.sub(_sv2);                                     // world delta: foot -> ankle
+    if (_sv1.lengthSq() < 1e-8) continue;
+    for (const b of [foot, toe]) {
+      if (!b) continue;
+      _sv2.setFromMatrixPosition(b.matrixWorld).add(_sv1);
+      b.parent.worldToLocal(_sv2);
+      b.position.copy(_sv2);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cars. The Quaternius sedan: body material is literally named "Blue" (tint
 // it), wheels are separate nodes that can spin and steer. Model forward is
 // +Z; normalised to 4.4 m long, origin at ground centre.

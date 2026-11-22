@@ -686,6 +686,7 @@ async function boot() {
   story = new Story(sim, world, hud, events);
   await sim.spawnPlayer();
   await sim.spawnPeds(21);   // round 7 density: 13 -> 21 pedestrians
+  await sim.spawnSeated();   // round 9: bench sitters at Taman Ombak
   await sim.spawnTraffic(15); // round 7 density: 9 -> 15 ambient cars
   await sim.spawnParked();
   await sim.spawnBaseHardware();
