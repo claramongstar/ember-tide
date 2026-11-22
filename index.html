@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>EMBER TIDE — Port Saraya</title>
 <style>
   html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#170c12;
@@ -98,6 +98,39 @@
   #cross { position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px 0 0 -3px; border-radius:50%;
     background:rgba(255,255,255,.85); box-shadow:0 0 6px rgba(0,0,0,.8); }
 
+  /* ---------- touch controls (Round 4; only shown on touch devices) ---------- */
+  #app, #app canvas, #touchui, #touchui * { touch-action:none; }
+  #touchui { position:fixed; inset:0; pointer-events:none; z-index:20; }
+  #stick { position:absolute; left:22px; bottom:30px; width:124px; height:124px; border-radius:50%;
+    pointer-events:auto; background:rgba(7,17,23,.34); border:2px solid rgba(23,195,195,.45);
+    box-shadow:0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.06); }
+  #knob { position:absolute; left:50%; top:50%; width:56px; height:56px; border-radius:50%;
+    transform:translate(-50%,-50%); background:linear-gradient(160deg, rgba(255,179,71,.85), rgba(255,140,66,.75));
+    border:2px solid rgba(255,255,255,.5); box-shadow:0 3px 10px rgba(0,0,0,.5); }
+  .tbtn { position:absolute; pointer-events:auto; border-radius:50%; border:2px solid rgba(23,195,195,.5);
+    background:rgba(7,17,23,.55); color:#eaf6f6; font-family:inherit; font-weight:800; letter-spacing:.08em;
+    display:flex; align-items:center; justify-content:center; text-align:center; cursor:pointer; padding:0;
+    box-shadow:0 4px 14px rgba(0,0,0,.45); -webkit-tap-highlight-color:transparent;
+    user-select:none; -webkit-user-select:none; }
+  .tbtn.on { background:rgba(255,140,66,.75); border-color:rgba(255,255,255,.7); color:#fff; }
+  #btnFire { right:20px; bottom:28px; width:80px; height:80px; font-size:15px;
+    background:rgba(160,40,30,.55); border-color:rgba(255,110,90,.65); }
+  #btnFire.on { background:rgba(220,60,45,.85); }
+  #btnJump { right:114px; bottom:24px; width:62px; height:62px; font-size:11px; }
+  #btnAct { right:28px; bottom:122px; width:62px; height:62px; font-size:17px;
+    border-color:rgba(255,179,71,.7); color:#ffd98a; }
+  #btnWep { right:116px; bottom:102px; width:56px; height:56px; font-size:8.5px; line-height:1.3; }
+  #btnPause { top:74px; left:50%; transform:translateX(-50%); width:46px; height:46px; font-size:12px; }
+  /* on touch the keyboard hint bar goes away and the bottom HUD panels
+     lift clear of the stick / button cluster */
+  body.touch #ctrlbar { display:none; }
+  body.touch #crew { display:none; }
+  body.touch #mapwrap, body.touch #minimap { width:140px; height:140px; }
+  body.touch #bl { bottom:auto; top:196px; }
+  body.touch #speedo { bottom:200px; }
+  body.touch #dialog { bottom:200px; }
+  body.touch #toast { bottom:212px; }
+
   /* ---------- overlays: loading / menu / pause ---------- */
   .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
     color:#f2f8f9; text-align:center; z-index:30; }
@@ -188,6 +221,15 @@
   <div id="cross" class="hidden"></div>
   <div id="vig"></div>
   <div id="ctrlbar"><b>WASD</b> MOVE &nbsp;·&nbsp; <b>SHIFT</b> RUN &nbsp;·&nbsp; <b>SPACE</b> JUMP &nbsp;·&nbsp; <b>E</b> ENTER / EXIT CAR &nbsp;·&nbsp; <b>MOUSE</b> AIM &nbsp;·&nbsp; <b>CLICK / F</b> FIRE &nbsp;·&nbsp; <b>1 / 2</b> WEAPONS &nbsp;·&nbsp; <b>P</b> PAUSE &nbsp;·&nbsp; <b>Q</b> QUALITY</div>
+</div>
+
+<div id="touchui" class="hidden">
+  <div id="stick"><div id="knob"></div></div>
+  <button class="tbtn" id="btnFire">FIRE</button>
+  <button class="tbtn" id="btnJump">JUMP</button>
+  <button class="tbtn" id="btnAct">E</button>
+  <button class="tbtn" id="btnWep">WEAPON</button>
+  <button class="tbtn" id="btnPause">II</button>
 </div>
 
 <div id="loading" class="screen">
