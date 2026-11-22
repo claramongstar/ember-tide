@@ -125,20 +125,48 @@ export class CarModel {
     scene.scale.multiplyScalar(4.4 / len);
     this.group = groundAndCenter(scene);
     addCarLights(this.group);
-    this.wheels = { fl: null, fr: null, back: [] };
+    // WHEEL PIVOTS. The GLB's wheel nodes carry identity transforms with the
+    // tyre geometry baked in car space, so a wheel node's origin is the CAR's
+    // centre, not the hub. Setting rotation.x on such a node (the old code)
+    // swings the wheel in a metre-wide arc around the car — after enough
+    // travel a front wheel ends up on the roof and a rear wheel floats.
+    // Instead, wrap each wheel in a steer group parked exactly on its hub
+    // (the wheel geometry's bbox centre) with a spin group inside it, and
+    // attach() the node so its rendered transform is unchanged. Spinning or
+    // steering the pivots then rotates the tyre around its own axle only.
+    // (BackWheels is one mesh holding both rear tyres; both hubs lie on the
+    // axle line through its bbox centre, so a single pivot is exact there.)
+    this.wheels = [];
+    this.group.updateMatrixWorld(true);
+    const wrapWheel = (node, steerable) => {
+      const parent = node.parent;
+      if (!parent) return;
+      const hub = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
+      const steer = new THREE.Group();
+      steer.position.copy(parent.worldToLocal(hub));
+      parent.add(steer);
+      const spin = new THREE.Group();
+      steer.add(spin);
+      spin.attach(node);
+      this.wheels.push({ spin, steer: steerable ? steer : null });
+    };
+    const wheelNodes = [];
     this.group.traverse((o) => {
-      if (/FrontLeftWheel/.test(o.name)) this.wheels.fl = o;
-      else if (/FrontRightWheel/.test(o.name)) this.wheels.fr = o;
-      else if (/BackWheels/.test(o.name)) this.wheels.back.push(o);
+      if (/Front(Left|Right)Wheel/.test(o.name)) wheelNodes.push([o, true]);
+      else if (/BackWheels/.test(o.name)) wheelNodes.push([o, false]);
     });
+    for (const [node, steerable] of wheelNodes) wrapWheel(node, steerable);
     this.spin = 0;
   }
   /** Roll the wheels for a travelled distance; steer the fronts. */
   roll(distance, steerAngle) {
-    this.spin += distance / 0.33;
-    const all = [this.wheels.fl, this.wheels.fr, ...this.wheels.back];
-    for (const w of all) if (w) w.rotation.x = this.spin;
-    for (const w of [this.wheels.fl, this.wheels.fr]) if (w) w.rotation.y = steerAngle;
+    // keep the angle wrapped: an ever-growing float loses precision and
+    // makes the tyres shimmer after a few minutes of driving
+    this.spin = (this.spin + distance / 0.33) % (Math.PI * 2);
+    for (const w of this.wheels) {
+      w.spin.rotation.x = this.spin;
+      if (w.steer) w.steer.rotation.y = steerAngle;
+    }
   }
 }
 

@@ -10,6 +10,10 @@ import { AVENUES, STREETS } from './world.js';
 
 const CAR_COLORS = [0x4762a3, 0xb6492f, 0x2e7a6a, 0xd9a05b, 0xe8e3d8, 0x7a4a6e, 0x3f6e46, 0xc2c7cc, 0x8c2f39, 0xe07b2a];
 const CAR_NAMES = ['SARAYA SEDAN', 'EMBER GT', 'TIDE HATCH', 'OMBak WAGON', 'STRAND COUPE'];
+// Past this z the pier deck is behind the player and the harbour water
+// (surface y = -0.5 in world.js) is underfoot: on-foot movement switches
+// to swimming. PIER_Z in world.js is 128 and the deck slab ends at z=129.
+const SWIM_LINE_Z = 129.3;
 
 export class VehicleEnt {
   constructor(kind, model, name) {
@@ -54,6 +58,8 @@ export class Sim {
     this.boomCount = 0;                  // lifetime totals (tests + bragging)
     this.shotsFired = 0;
     this.player = null;
+    this.promptText = null;              // current interaction prompt for the HUD
+    this._footColliders = [];            // scratch: colliders minus the waterline
     this._initFx();
   }
 
@@ -135,8 +141,13 @@ export class Sim {
     this.player = {
       char: ch, heading: s.heading, speed: 0,
       health: 100, armour: 0, money: 120,
-      weapon: 'fists', ammo: { pistol: 0, carbine: 0 },
+      // War-ready start: Raka carries Sinta's 9MM from the first minute, so
+      // combat (this game's identity) works immediately instead of after a
+      // story beat. The story's own pistol grant uses Math.max, so it still
+      // lands as a top-up rather than a downgrade.
+      weapon: 'pistol', ammo: { pistol: 60, carbine: 0 },
       vehicle: null, dead: false, fireCd: 0, stepT: 0,
+      vy: 0, grounded: true, swimming: false,
     };
     return this.player;
   }
@@ -256,7 +267,7 @@ export class Sim {
     this.time += dt;
     dt = Math.min(dt, 0.05);
     this._updateFx(dt);
-    if (!this.player || this.player.dead) return;
+    if (!this.player || this.player.dead) { this.promptText = null; return; }
     if (this.player.vehicle) this._updateDriving(dt, input);
     else this._updateOnFoot(dt, input);
     this._updateTraffic(dt);
@@ -321,17 +332,27 @@ export class Sim {
   _updateOnFoot(dt, input) {
     const p = this.player;
     const ch = p.char;
+    // On foot the waterline wall (tagged `water` in world.js) does not
+    // apply, so the player can step off the pier deck and swim; vehicles
+    // keep the full collider set and still stop at the deck edge. The
+    // filtered list is rebuilt per call from the live colliders, so the
+    // base gate's add/remove keeps working for the player too.
+    const fc = this._footColliders;
+    fc.length = 0;
+    for (const c of this.colliders) if (!c.water) fc.push(c);
     const mx = input.moveX || 0, mz = input.moveZ || 0;
     const mag = Math.hypot(mx, mz);
-    const running = input.run && mag > 0.1;
-    const speed = mag < 0.1 ? 0 : running ? 6.6 : 3.4;
+    const swimming = ch.position.z > SWIM_LINE_Z;
+    p.swimming = swimming;
+    const running = input.run && mag > 0.1 && !swimming;
+    const speed = mag < 0.1 ? 0 : swimming ? 1.9 : running ? 6.6 : 3.4;
     p.speed = speed;
     if (mag > 0.1) {
       const target = Math.atan2(mx, mz);
       p.heading = turnToward(p.heading, target, dt * 11);
       let nx = ch.position.x + Math.sin(p.heading) * speed * dt * Math.min(1, mag);
       let nz = ch.position.z + Math.cos(p.heading) * speed * dt * Math.min(1, mag);
-      [nx, nz] = collideCircle(this.colliders, nx, nz, 0.42);
+      [nx, nz] = collideCircle(fc, nx, nz, 0.42);
       // don't walk through vehicles
       for (const v of this.vehicles) {
         if (v.kind === 'jet') continue;
@@ -344,24 +365,55 @@ export class Sim {
       }
       ch.position.x = nx; ch.position.z = nz;
     }
+    if (swimming) {
+      // keep the swim inside the harbour basin, within sight of the pier
+      ch.position.x = clamp(ch.position.x, -160, 262);
+      ch.position.z = Math.min(ch.position.z, 205);
+    }
     ch.group.rotation.y = p.heading;
+    // vertical: buoyancy in the water, jump + gravity on land
+    if (swimming) {
+      p.vy = 0; p.grounded = false;
+      // water surface is y=-0.5; ride at chest depth with a slow bob
+      const bobY = -1.18 + Math.sin(this.time * 1.7) * 0.07;
+      ch.position.y = lerp(ch.position.y, bobY, Math.min(1, dt * 5));
+    } else if (ch.position.y < 0) {
+      // climbed out of the water onto the deck
+      ch.position.y = 0; p.vy = 0; p.grounded = true;
+    } else {
+      if (input.jump && p.grounded) { p.vy = 4.7; p.grounded = false; }
+      if (!p.grounded) {
+        p.vy -= 13.5 * dt;
+        ch.position.y += p.vy * dt;
+        if (ch.position.y <= 0) { ch.position.y = 0; p.vy = 0; p.grounded = true; }
+      }
+    }
     const armed = p.weapon !== 'fists';
-    const anim = speed === 0 ? (armed ? 'Idle_Gun_Pointing' : 'Idle') : running ? 'Run' : 'Walk';
+    const anim = swimming ? 'Walk'
+      : speed === 0 ? (armed ? 'Idle_Gun_Pointing' : 'Idle') : running ? 'Run' : 'Walk';
     ch.play(anim);
-    ch.update(dt);
+    ch.update(swimming ? dt * 0.5 : dt);   // a slower stroke while swimming
     // fire
     p.fireCd -= dt;
     if (input.fire && armed && p.fireCd <= 0) this._playerShoot(input);
     // interact: enter nearest vehicle (big hulls board from further out —
-    // the Kestrel's centre is metres from any point on its fuselage)
-    if (input.interact) {
+    // the Kestrel's centre is metres from any point on its fuselage). The
+    // same proximity test drives the on-screen prompt, so what the player
+    // sees is exactly what E will do.
+    let near = null;
+    {
       const v = this._nearestVehicle(ch.position.x, ch.position.z, 6);
       if (v) {
         const d = dist2d(ch.position.x, ch.position.z, v.pos.x, v.pos.z);
         const reach = v.kind === 'jet' ? 5.5 : v.kind === 'tank' ? 4.6 : 3.6;
-        if (d < reach) this.enterVehicle(v);
+        if (d < reach) near = v;
       }
     }
+    this.promptText = !near ? null
+      : near.kind === 'tank' ? 'E — ENTER TANK'
+      : near.kind === 'jet' ? 'E — ENTER JET'
+      : 'E — ENTER CAR';
+    if (input.interact && near) this.enterVehicle(near);
   }
 
   _nearestVehicle(x, z, maxD) {
@@ -376,6 +428,7 @@ export class Sim {
 
   enterVehicle(v) {
     const p = this.player;
+    this.promptText = null;
     if (v.driver === 'traffic') { v.driver = 'parked'; v.traffic = null; this.crime(0.55, v.pos.x, v.pos.z); }
     if (v.driver === 'column') { v.driver = 'parked'; this.crime(1.2, v.pos.x, v.pos.z); }
     v.driver = 'player';
@@ -407,7 +460,9 @@ export class Sim {
   _updateDriving(dt, input) {
     const p = this.player;
     const v = p.vehicle;
-    if (input.interact) { if (Math.abs(v.speed) < 4 || v.kind === 'jet') { this.exitVehicle(); return; } }
+    if (input.interact) { if (Math.abs(v.speed) < 4 || v.kind === 'jet') { this.promptText = null; this.exitVehicle(); return; } }
+    // mirror the exit rule above: the prompt shows exactly when E works
+    this.promptText = (Math.abs(v.speed) < 4 || v.kind === 'jet') ? 'E — EXIT' : null;
     if (v.kind === 'jet') return this._updateJet(dt, input, v);
     const isTank = v.kind === 'tank';
     const maxF = isTank ? 9.5 : v.name === 'EMBER GT' ? 39 : 33;
@@ -610,18 +665,28 @@ export class Sim {
   }
 
   // ------------------------------------------------------------- peds --
+  /** Far-away crowds don't need 60 Hz skeletons: beyond ~85 m their mixers
+   *  advance in ~11 Hz slices. Movement still runs every frame, so nothing
+   *  drifts or pops — only the (unreadable, at that range) limb motion is
+   *  sampled coarser. A real saving on integrated GPUs/CPUs. */
+  _pedAnim(ped, dt, far) {
+    if (!far) { ped.char.update(dt); return; }
+    ped.animAcc = (ped.animAcc || 0) + dt;
+    if (ped.animAcc >= 0.09) { ped.char.update(ped.animAcc); ped.animAcc = 0; }
+  }
   _updatePeds(dt) {
     const pp = this.playerPos();
     for (const ped of this.peds) {
       const ch = ped.char;
+      const dPlayer = dist2d(ch.position.x, ch.position.z, pp.x, pp.z);
+      const far = dPlayer > 85;
       if (ped.state === 'down') {
         ped.deadT -= dt;
         if (ped.deadT <= 0) { ped.state = 'walk'; ch.play('Walk'); this._respawnPed(ped, pp); }
-        ch.update(dt);
+        this._pedAnim(ped, dt, far);
         continue;
       }
       // keep the crowd near the player
-      const dPlayer = dist2d(ch.position.x, ch.position.z, pp.x, pp.z);
       if (dPlayer > 185) this._respawnPed(ped, pp);
       let speed = ped.speed, dirSign = ped.dir;
       if (ped.fleeT > 0) {
@@ -635,7 +700,7 @@ export class Sim {
         [nx, nz] = collideCircle(this.colliders, nx, nz, 0.4);
         ch.position.x = nx; ch.position.z = nz;
         ch.play('Run');
-        ch.update(dt);
+        this._pedAnim(ped, dt, far);
         continue;
       }
       // sidewalk walking: along one axis at a fixed offset line
@@ -650,7 +715,7 @@ export class Sim {
       const heading = ped.axis === 'x' ? (ped.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (ped.dir > 0 ? 0 : Math.PI);
       ch.group.rotation.y = turnToward(ch.group.rotation.y, heading, dt * 5);
       ch.play(ped.fleeT > 0 ? 'Run' : 'Walk');
-      ch.update(dt);
+      this._pedAnim(ped, dt, far);
     }
   }
   _respawnPed(ped, near) {

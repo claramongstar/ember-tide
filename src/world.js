@@ -344,9 +344,9 @@ function buildBuilding(scene, colliders, rng, veg, opts, facadeMats) {
   const terraM = std(0xa85f38, 0.9), leafM = flat(0x4d7d33, 0.9);
   const plantPot = (px, py, pz, s = 1) => {
     const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.10 * s, 0.075 * s, 0.17 * s, 8), terraM);
-    pot.position.set(px, py, pz); pot.castShadow = true; grp.add(pot);
+    pot.position.set(px, py, pz); grp.add(pot);           // sub-texel at shadow range: no cast
     const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15 * s, 1), leafM);
-    blob.position.set(px, py + 0.16 * s, pz); blob.castShadow = true; grp.add(blob);
+    blob.position.set(px, py + 0.16 * s, pz); grp.add(blob);
   };
   let nBalc = 0, nAC = 0;
   for (let f = 0; f < floors; f++) {
@@ -356,26 +356,28 @@ function buildBuilding(scene, colliders, rng, veg, opts, facadeMats) {
         nBalc++;
         const bx = winX(col), by = sillY(f);
         box(1.8, 0.09, 0.66, concreteM, bx, by - 0.06, frontZ + 0.33, grp);
-        box(1.8, 0.05, 0.05, railM, bx, by + 0.52, frontZ + 0.62, grp);
-        for (let sp = 0; sp < 6; sp++) box(0.035, 0.5, 0.035, railM, bx - 0.75 + sp * 0.3, by + 0.26, frontZ + 0.62, grp);
-        box(0.05, 0.05, 0.6, railM, bx - 0.87, by + 0.52, frontZ + 0.33, grp);
-        box(0.05, 0.05, 0.6, railM, bx + 0.87, by + 0.52, frontZ + 0.33, grp);
+        // balcony rails/spindles are centimetre-thin: invisible in a 340 m
+        // shadow frustum, but each was a shadow-pass draw call. No cast.
+        box(1.8, 0.05, 0.05, railM, bx, by + 0.52, frontZ + 0.62, grp).castShadow = false;
+        for (let sp = 0; sp < 6; sp++) box(0.035, 0.5, 0.035, railM, bx - 0.75 + sp * 0.3, by + 0.26, frontZ + 0.62, grp).castShadow = false;
+        box(0.05, 0.05, 0.6, railM, bx - 0.87, by + 0.52, frontZ + 0.33, grp).castShadow = false;
+        box(0.05, 0.05, 0.6, railM, bx + 0.87, by + 0.52, frontZ + 0.33, grp).castShadow = false;
         if (rng() < 0.3) plantPot(bx + 0.58, by - 0.01, frontZ + 0.3, 0.9);
         if (rng() < 0.16) {
           const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.62),
             std([0xf2e3c8, 0xe58e6d, 0x9fd4c5, 0xf7d774][Math.floor(rng() * 4)], 0.95, { side: THREE.DoubleSide }));
           cloth.position.set(bx - 0.32, by + 0.2, frontZ + 0.64);
-          cloth.rotation.z = (rng() - 0.5) * 0.12; cloth.castShadow = true; grp.add(cloth);
+          cloth.rotation.z = (rng() - 0.5) * 0.12; grp.add(cloth);
         }
       } else if (!groundBand && nAC < 4 && rng() < 0.14) {
         nAC++;
         box(0.56, 0.38, 0.3, acM, winX(col), sillY(f) - 0.3, frontZ + 0.16, grp);
-        box(0.46, 0.28, 0.03, std(0x3a3f42, 0.7), winX(col), sillY(f) - 0.3, frontZ + 0.32, grp);
+        box(0.46, 0.28, 0.03, std(0x3a3f42, 0.7), winX(col), sillY(f) - 0.3, frontZ + 0.32, grp).castShadow = false;
       }
     }
   }
   const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h - 0.4, 6), std(0x4a4038, 0.8));
-  pipe.position.set(-w / 2 + 0.3, (h - 0.4) / 2 + 0.1, frontZ + 0.07); pipe.castShadow = true; grp.add(pipe);
+  pipe.position.set(-w / 2 + 0.3, (h - 0.4) / 2 + 0.1, frontZ + 0.07); grp.add(pipe); // 9 cm wide: no cast
   if (h >= 10 && rng() < 0.45) {
     const hs = 2.3 + rng() * 1.4, sw = w * 0.64, sd = d * 0.68;
     const lay2 = { floors: 1, cols: Math.max(2, Math.round(sw / 2.6)), parapetPx: 512 * 0.3 / hs, shopPx: 0 };
@@ -455,7 +457,7 @@ export function buildWorld(scene, seed = 1) {
   scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffa257, 2.7);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.mapSize.set(768, 768); // the frustum spans 340 m, so texels were already ~33 cm; 768 costs little softness, saves real fill
   sun.shadow.camera.left = -170; sun.shadow.camera.right = 170;
   sun.shadow.camera.top = 170; sun.shadow.camera.bottom = -170;
   sun.shadow.camera.far = 700; sun.shadow.bias = -0.0006;
@@ -1272,7 +1274,9 @@ export function buildWorld(scene, seed = 1) {
     g.userData.wr.rotation.set(0, 0.85, -0.15);
   }
 
-  colliders.push({ minX: -170, maxX: 276, minZ: 127.4, maxZ: 129 }); // waterline
+  // waterline: stops vehicles at the deck edge. Tagged `water` so the
+  // on-foot player may pass it and swim (play.js filters it out for feet).
+  colliders.push({ minX: -170, maxX: 276, minZ: 127.4, maxZ: 129, water: true });
 
   // ---- Sable Point Naval Air Station ----
   const oliveM = std(0x5c6248, 0.95), oliveD = std(0x494f3a, 0.95), concM = std(0x8d8578, 1);

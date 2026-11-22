@@ -24,7 +24,7 @@ const events = new Events();
 // ------------------------------------------------------------ renderer --
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25)); // capped: fill-rate is the weak-iGPU bottleneck
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.shadowMap.autoUpdate = false;
@@ -105,6 +105,7 @@ function readInput() {
   const inJet = sim && sim.player && sim.player.vehicle && sim.player.vehicle.kind === 'jet';
   const input = {
     moveX, moveZ,
+    jump: k('Space'),   // on foot only; vehicles read Space via burner/firePressed below
     run: k('ShiftLeft') || k('ShiftRight'),
     throttle: fwd - back,
     steer: left - right,
@@ -443,6 +444,7 @@ async function boot() {
     mode = 'shot';
     $('loading').classList.add('hidden');
     hud.show();
+    $('ctrlbar').style.display = 'none'; // staged frames keep the shipped composition
   } else {
     mode = 'menu';
     $('loading').classList.add('hidden');
@@ -499,6 +501,7 @@ function frame(now) {
       health: p.health, armour: p.armour,
       weapon: p.weapon, ammo: p.ammo[p.weapon] || 0,
       vehicle: veh, speedKmh: veh ? veh.speed * 3.6 : 0,
+      prompt: sim.promptText || null,
       player: { x: pp.x, z: pp.z, heading: veh ? veh.heading : p.heading },
       vehicles: sim.vehicles, marker: story && story.active ? story._stepTarget() : null,
       crewBlips: story ? story.crewBlips() : [], t: sim.time,

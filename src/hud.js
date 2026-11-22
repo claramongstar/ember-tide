@@ -39,7 +39,7 @@ export class Hud {
       dialog: $('dialog'), dialogAvatar: $('dialogAvatar'), dialogName: $('dialogName'), dialogText: $('dialogText'),
       speedo: $('speedo'), speedVal: $('speedVal'), speedCar: $('speedCar'), speedBar: $('speedBar'), speedSub: $('speedSub'),
       banner: $('banner'), bannerBig: $('bannerBig'), bannerSmall: $('bannerSmall'),
-      toast: $('toast'), cross: $('cross'), minimap: $('minimap'),
+      toast: $('toast'), cross: $('cross'), minimap: $('minimap'), prompt: $('prompt'),
     };
     this.crewStatus = new Map(CREW.map((c) => [c.id, { text: '—', dot: '#58d977' }]));
     this._buildCrew();
@@ -48,6 +48,8 @@ export class Hud {
     this.bannerT = 0;
     this.toastT = 0;
     this.locName = '';
+    this.promptShown = undefined;        // last prompt text rendered (undefined = never)
+    this.mapAcc = 0;                     // minimap redraw throttle accumulator
     this.mapCtx = this.el.minimap.getContext('2d');
     this._buildMapBase();
   }
@@ -83,6 +85,16 @@ export class Hud {
   dialogue(who, text, dur = 4.2) {
     const c = CREW.find((k) => k.id === who) || CREW[0];
     this.dialogQueue.push({ c, text, dur });
+  }
+  /** Interaction prompt pill ("E — ENTER CAR"). Driven by the sim's
+   *  proximity test every frame; only touches the DOM when it changes. */
+  setPrompt(text) {
+    if (text === this.promptShown) return;
+    this.promptShown = text;
+    if (text) {
+      this.el.prompt.textContent = text;
+      this.el.prompt.classList.remove('hidden');
+    } else this.el.prompt.classList.add('hidden');
   }
   toast(text, dur = 3.2) {
     this.el.toast.textContent = text;
@@ -190,7 +202,11 @@ export class Hud {
     if (s.weapon !== 'fists' && !s.vehicle) this.el.cross.classList.remove('hidden');
     else if (s.vehicle && s.vehicle.kind === 'tank') this.el.cross.classList.remove('hidden');
     else this.el.cross.classList.add('hidden');
-    this.drawMap(s);
+    this.setPrompt(s.prompt || null);
+    // the minimap is a 356² canvas redraw: 20 Hz is indistinguishable from
+    // 60 Hz for a map, and the saved fill helps weak integrated GPUs
+    this.mapAcc += dt;
+    if (this.mapAcc >= 0.05) { this.mapAcc = 0; this.drawMap(s); }
     void distText;
   }
 }
