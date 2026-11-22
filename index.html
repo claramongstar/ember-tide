@@ -56,7 +56,7 @@
   .mate .rl { font-size:9px; letter-spacing:.14em; color:#9fc6cc; font-weight:700; }
   .mate .st { font-size:9.5px; color:#bfe9c8; white-space:nowrap; }
   .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; vertical-align:1px; }
-  #bl { position:absolute; left:18px; bottom:18px; display:flex; flex-direction:column; gap:9px; }
+  #bl { position:absolute; left:18px; bottom:38px; display:flex; flex-direction:column; gap:9px; }
   #mapwrap { width:178px; height:178px; border-radius:12px; overflow:hidden; position:relative;
     border:1px solid rgba(23,195,195,.45); box-shadow:0 4px 18px rgba(0,0,0,.5); background:#0d1b21; }
   #minimap { width:178px; height:178px; display:block; }
@@ -66,12 +66,12 @@
   .bar .lab { display:flex; justify-content:space-between; font-size:9px; font-weight:800; letter-spacing:.18em; color:#cfe8ec; }
   .bar .track { margin-top:3px; height:7px; border-radius:4px; background:rgba(255,255,255,.13); overflow:hidden; }
   .bar .fill { display:block; height:100%; border-radius:4px; }
-  #dialog { position:absolute; bottom:18px; left:50%; transform:translateX(-50%); width:560px; max-width:72vw;
+  #dialog { position:absolute; bottom:38px; left:50%; transform:translateX(-50%); width:560px; max-width:72vw;
     padding:11px 16px 12px 13px; display:flex; gap:12px; align-items:flex-start; }
   #dialog .avatar { width:38px; height:38px; flex-basis:38px; font-size:16px; }
   #dialog .nm { font-size:11px; font-weight:800; letter-spacing:.2em; color:#ffb347; }
   #dialog .tx { margin-top:2px; font-size:14.5px; line-height:1.4; color:#f2f8f9; }
-  #speedo { position:absolute; right:18px; bottom:18px; width:158px; padding:10px 13px 11px; text-align:right; }
+  #speedo { position:absolute; right:18px; bottom:38px; width:158px; padding:10px 13px 11px; text-align:right; }
   #speedVal { font-size:46px; font-weight:800; color:#fff; line-height:.95; text-shadow:0 2px 10px rgba(0,0,0,.6); }
   #speedo .sunit { font-size:10px; font-weight:800; letter-spacing:.22em; color:#ffb347; margin-top:2px; }
   #speedo .scar { font-size:9.5px; font-weight:700; letter-spacing:.12em; color:#cfe8ec; margin-top:5px; }
@@ -86,6 +86,15 @@
     text-shadow:0 2px 10px rgba(0,0,0,.8); }
   #toast { position:absolute; bottom:118px; left:50%; transform:translateX(-50%); padding:7px 14px;
     font-size:13px; font-weight:700; letter-spacing:.06em; color:#fff; white-space:nowrap; }
+  #prompt { position:absolute; bottom:23%; left:50%; transform:translateX(-50%); padding:10px 24px;
+    border-radius:999px; font-size:16px; font-weight:800; letter-spacing:.16em; color:#fff; white-space:nowrap;
+    background:linear-gradient(160deg, rgba(7,17,23,.9), rgba(7,13,18,.75));
+    border:1px solid rgba(255,179,71,.7); box-shadow:0 4px 18px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+    text-shadow:0 1px 4px rgba(0,0,0,.7); }
+  #ctrlbar { position:absolute; left:0; right:0; bottom:0; padding:5px 10px 6px; text-align:center;
+    font-size:11px; font-weight:600; letter-spacing:.1em; color:#cfe8ec; white-space:nowrap; overflow:hidden;
+    background:rgba(7,13,18,.78); border-top:1px solid rgba(23,195,195,.38); }
+  #ctrlbar b { color:#ffd98a; font-weight:800; }
   #cross { position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px 0 0 -3px; border-radius:50%;
     background:rgba(255,255,255,.85); box-shadow:0 0 6px rgba(0,0,0,.8); }
 
@@ -175,8 +184,10 @@
   </div>
   <div id="banner" class="hidden"><div class="big" id="bannerBig"></div><div class="small" id="bannerSmall"></div></div>
   <div class="panel hidden" id="toast"></div>
+  <div id="prompt" class="hidden"></div>
   <div id="cross" class="hidden"></div>
   <div id="vig"></div>
+  <div id="ctrlbar"><b>WASD</b> MOVE &nbsp;·&nbsp; <b>SHIFT</b> RUN &nbsp;·&nbsp; <b>SPACE</b> JUMP &nbsp;·&nbsp; <b>E</b> ENTER / EXIT CAR &nbsp;·&nbsp; <b>MOUSE</b> AIM &nbsp;·&nbsp; <b>CLICK / F</b> FIRE &nbsp;·&nbsp; <b>1 / 2</b> WEAPONS &nbsp;·&nbsp; <b>P</b> PAUSE</div>
 </div>
 
 <div id="loading" class="screen">
@@ -194,7 +205,7 @@
   </div>
   <div class="controls">
     <b>WASD / ←↑↓→</b> move &amp; drive &nbsp;·&nbsp; <b>SHIFT</b> run &nbsp;·&nbsp; <b>E</b> enter / exit vehicle<br>
-    <b>MOUSE</b> aim &nbsp;·&nbsp; <b>CLICK / F</b> shoot &nbsp;·&nbsp; <b>SPACE</b> tank gun / jet afterburner<br>
+    <b>MOUSE</b> aim &nbsp;·&nbsp; <b>CLICK / F</b> shoot &nbsp;·&nbsp; <b>SPACE</b> jump · tank gun / jet afterburner<br>
     <b>1 / 2</b> pistol · carbine &nbsp;·&nbsp; <b>P / ESC</b> pause &nbsp;·&nbsp; jet: <b>W/S</b> throttle, <b>&darr;</b> pull up
   </div>
   <div class="credits">A FICTIONAL CITY · ALL NAMES INVENTED · MODELS: QUATERNIUS (CC0) · ENGINE: THREE.JS (MIT)</div>
