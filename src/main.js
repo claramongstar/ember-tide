@@ -587,8 +587,8 @@ async function boot() {
   if (quality && IS_TOUCH) applyQuality(quality.tier);
   story = new Story(sim, world, hud, events);
   await sim.spawnPlayer();
-  await sim.spawnPeds(13);
-  await sim.spawnTraffic(9);
+  await sim.spawnPeds(21);   // round 7 density: 13 -> 21 pedestrians
+  await sim.spawnTraffic(15); // round 7 density: 9 -> 15 ambient cars
   await sim.spawnParked();
   await sim.spawnBaseHardware();
   await story.initCrew();

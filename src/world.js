@@ -509,6 +509,78 @@ export function buildWorld(scene, seed = 1) {
     hill.castShadow = false; hill.receiveShadow = false;
   }
 
+  // ---- mountain backdrop (round 6) ----
+  // Port Saraya is a coastal bowl: the sea lies south (+z), so the land
+  // rises to the NORTH. Two layered ridge strips run along the northern
+  // horizon behind the city and the base, and one peaked island sits
+  // across the bay to the south-west. Each layer is a single merged strip
+  // built from a gaussian-bump crest profile — one draw call per layer,
+  // a few hundred triangles total, no colliders, no per-frame cost.
+  // Vertex colours carry the tropical two-tone (green lower slopes, warm
+  // rock above the split); the far layer's colours start lighter/bluer
+  // and the scene fog grades it the rest of the way. A plain
+  // MeshStandardMaterial (fog on, flat shading) means the day-night
+  // cycle darkens the ranges exactly like the rest of the world.
+  // Own rng stream, like the road dressing: the city below generates
+  // exactly as before.
+  {
+    const mrng = makeRng(60210);
+    const ridgeMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+    const buildRidge = (x0, x1, zToeF, zCrest, zToeB, split, bumps, colLow, colHigh) => {
+      const cL = new THREE.Color(colLow), cH = new THREE.Color(colHigh);
+      const cBack = cH.clone().multiplyScalar(0.72);
+      const N = Math.max(8, Math.round((x1 - x0) / 36));
+      const pos = [], col = [], idx = [];
+      const hAt = (x) => {
+        let h = 4;
+        for (const b of bumps) { const d = (x - b.x) / b.w; h += b.h * Math.exp(-d * d); }
+        return h;
+      };
+      // four rows per column: front toe / slope split / crest / back toe
+      for (let i = 0; i <= N; i++) {
+        const x = x0 + (x1 - x0) * (i / N);
+        const h = Math.max(3, hAt(x) * (0.92 + mrng() * 0.16));
+        const rows = [
+          [x, -2, zToeF, cL],
+          [x, h * split, zToeF + (zCrest - zToeF) * 0.62, cL],
+          [x, h, zCrest, cH],
+          [x, -2, zToeB, cBack],
+        ];
+        for (const [vx, vy, vz, vc] of rows) { pos.push(vx, vy, vz); col.push(vc.r, vc.g, vc.b); }
+      }
+      for (let i = 0; i < N; i++) {
+        const a = i * 4, b = (i + 1) * 4;
+        for (let r = 0; r < 3; r++) idx.push(a + r, b + r, a + r + 1, b + r, b + r + 1, a + r + 1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      const m = new THREE.Mesh(g, ridgeMat);
+      m.castShadow = false; m.receiveShadow = false;
+      scene.add(m);
+      return m;
+    };
+    // near range: crests 48–76 m at z=-252, ~140 m behind the city edge —
+    // well outside every movement clamp, reads over the rooftops from
+    // spawn and the mission-1 streets
+    buildRidge(-580, 640, -206, -252, -296, 0.45, [
+      { x: -430, h: 55, w: 90 }, { x: -250, h: 72, w: 110 }, { x: -60, h: 48, w: 80 },
+      { x: 120, h: 66, w: 120 }, { x: 300, h: 58, w: 95 }, { x: 470, h: 44, w: 85 },
+    ], 0x476b35, 0x77644f);
+    // far range: crests 74–136 m at z=-368, bluer stock colours + fog
+    buildRidge(-620, 680, -320, -368, -412, 0.4, [
+      { x: -500, h: 105, w: 150 }, { x: -280, h: 132, w: 170 }, { x: -40, h: 95, w: 140 },
+      { x: 200, h: 124, w: 180 }, { x: 430, h: 88, w: 130 }, { x: 590, h: 70, w: 110 },
+    ], 0x5c7a63, 0x8d97a8);
+    // island across the bay (SW): low green peaks rising out of the water
+    // between the flat headland slabs, facing the pier
+    buildRidge(-250, -40, 338, 372, 406, 0.5, [
+      { x: -190, h: 26, w: 55 }, { x: -110, h: 34, w: 65 }, { x: -45, h: 20, w: 45 },
+    ], 0x3f6034, 0x6d5a49);
+  }
+
   // ---- land slab, asphalt road strips, block sidewalks ----
   // (The asphalt used to be one map-wide plane: it buried the sidewalk slabs
   // and the base pads under a single dark sheet and carried a long sun-glare

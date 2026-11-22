@@ -696,6 +696,23 @@ export class Sim {
       pos.z += Math.cos(v.heading) * v.speed * dt;
       v.group.rotation.y = v.heading;
       if (v.model && v.model.roll) v.model.roll(v.speed * dt, clamp(dd, -0.4, 0.4));
+      // Round 7 (density): more cars make the known no-overtake deadlock
+      // likelier — a car wedged nose-to-tail (classically behind a
+      // lane-parked car) would anchor a permanent queue. A car that has
+      // barely moved for 14 s AND is far from the player is quietly
+      // recycled onto a fresh city segment; near the player nothing pops.
+      if (Math.abs(v.speed) < 0.3) {
+        tr.stuckT = (tr.stuckT || 0) + dt;
+        if (tr.stuckT > 14) {
+          const pp = this.playerPos();
+          if (dist2d(pos.x, pos.z, pp.x, pp.z) > 60) {
+            const seg2 = this.cityRoads[Math.floor(this.rng() * this.cityRoads.length)];
+            const dir2 = this.rng() < 0.5 ? 1 : -1;
+            this._placeOnSeg(v, seg2, dir2, 0.15 + this.rng() * 0.7);
+            v.traffic = { seg: seg2, dir: dir2, turnTarget: null, lastJunction: '', stuckT: 0 };
+          }
+        }
+      } else tr.stuckT = 0;
     }
   }
 
