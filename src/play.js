@@ -153,7 +153,7 @@ export class Sim {
       // story beat. The story's own pistol grant uses Math.max, so it still
       // lands as a top-up rather than a downgrade.
       weapon: 'pistol', ammo: { pistol: 60, carbine: 0 },
-      vehicle: null, dead: false, fireCd: 0, stepT: 0,
+      vehicle: null, dead: false, fireCd: 0, stepT: 0, aimT: 0,
       vy: 0, grounded: true, swimming: false,
     };
     return this.player;
@@ -281,6 +281,7 @@ export class Sim {
     this._updatePeds(dt);
     this._updatePolice(dt);
     this._updateMilitary(dt);
+    this._separateVehicles();
     this._updateWanted(dt);
     for (const v of this.vehicles) {
       if (v.kind === 'tank') v.model.update(dt);
@@ -333,6 +334,71 @@ export class Sim {
       if (v.group.userData.lightBar) updateLightBar(v.group, this.time);
     }
     this._updateFx(dt);
+  }
+
+  // ------------------------------------------------- vehicle separation --
+  /** Hull radius per kind — the same numbers _updateDriving uses for the
+   *  player's car, so every vehicle pair plays by one rule. */
+  _hullR(v) { return v.kind === 'tank' ? 3.4 : v.kind === 'jet' ? 3.2 : 2.3; }
+  /** How far the separation pass may push a vehicle. 0 = a wall: the
+   *  player's own ride (never teleport the player), the parked Kestrel,
+   *  a Badak column (it crushes; others yield), wrecks, and parked cars
+   *  (their spots are audited — traffic must go around, not shove them
+   *  sideways over a session). Traffic and police take the push. */
+  _sepWeight(v) {
+    if (v.destroyed) return 0;
+    if (v.kind === 'jet') return 0;
+    if (this.player && v === this.player.vehicle) return 0;
+    if (v.driver === 'parked' || v.driver === 'column') return 0;
+    return 1;
+  }
+  /** Round 8: cars must never pass through each other. Movement code
+   *  only ever resolved the PLAYER's vehicle against the world; traffic,
+   *  police and columns moved on gap-braking alone, and two cars timed
+   *  into the same junction (or a traffic car meeting a parked one on a
+   *  turn) interpenetrated freely — a staged crossing bottomed out at
+   *  0.17 m centre distance, and an organic soak parked a traffic car
+   *  0.21 m from a parked car's centre. This pass runs after every
+   *  movement update: any two ground hulls found overlapping are pushed
+   *  apart along their centre line, split by _sepWeight (positions only
+   *  — no velocity is touched, so nothing can be launched), twice for
+   *  chains, and anything shoved into a building is pushed back out by
+   *  the static collider pass. Airborne jets are not obstacles. */
+  _separateVehicles() {
+    const vs = this.vehicles;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < vs.length; i++) {
+        const a = vs[i];
+        if (a.kind === 'jet' && !a.onGround) continue;
+        for (let j = i + 1; j < vs.length; j++) {
+          const b = vs[j];
+          if (b.kind === 'jet' && !b.onGround) continue;
+          const rr = this._hullR(a) + this._hullR(b);
+          const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+          const d2 = dx * dx + dz * dz;
+          if (!(d2 < rr * rr)) continue; // also skips NaN
+          const wa = this._sepWeight(a), wb = this._sepWeight(b);
+          if (wa + wb <= 0) continue;
+          let d = Math.sqrt(d2), ux = 1, uz = 0;
+          if (d > 1e-4) { ux = dx / d; uz = dz / d; } else d = 0;
+          const pen = rr - d, tot = wa + wb;
+          if (wa > 0) {
+            a.group.position.x -= ux * pen * (wa / tot);
+            a.group.position.z -= uz * pen * (wa / tot);
+          }
+          if (wb > 0) {
+            b.group.position.x += ux * pen * (wb / tot);
+            b.group.position.z += uz * pen * (wb / tot);
+          }
+        }
+      }
+    }
+    for (const v of vs) {
+      if (v.kind === 'jet' && !v.onGround) continue;
+      if (this._sepWeight(v) <= 0) continue; // unmoved by the pass: nothing to repair
+      const [nx, nz] = collideCircle(this.colliders, v.pos.x, v.pos.z, v.kind === 'tank' ? 2.6 : 1.7);
+      v.group.position.x = nx; v.group.position.z = nz;
+    }
   }
 
   // ------------------------------------------------------------- on foot --
@@ -396,8 +462,17 @@ export class Sim {
       }
     }
     const armed = p.weapon !== 'fists';
+    // Aiming is a moment, not a stance (round 8, owner: idle must not be
+    // a gun-pointing pose). The pointing clip engages only while FIRE is
+    // held and for a short settle after the last shot; the rest of the
+    // time an armed Raka carries the gun low at his side (Idle_Gun),
+    // and walking/running keep the plain low-carry cycles throughout.
+    if (input.fire && armed) p.aimT = 0.9;
+    else p.aimT = Math.max(0, (p.aimT || 0) - dt);
+    const aiming = (p.aimT || 0) > 0;
     const anim = swimming ? 'Walk'
-      : speed === 0 ? (armed ? 'Idle_Gun_Pointing' : 'Idle') : running ? 'Run' : 'Walk';
+      : speed === 0 ? (aiming ? 'Idle_Gun_Pointing' : armed ? 'Idle_Gun' : 'Idle')
+      : running ? 'Run' : 'Walk';
     ch.play(anim);
     ch.update(swimming ? dt * 0.5 : dt);   // a slower stroke while swimming
     // fire
@@ -967,6 +1042,7 @@ export class Sim {
       const wantH = engaging
         ? (Math.abs(dx) > 6 ? (dx > 0 ? Math.PI / 2 : -Math.PI / 2) : v.heading)
         : (v.pos.x >= pp.x ? Math.PI / 2 : -Math.PI / 2);
+      const hBefore = v.heading;
       v.heading = turnToward(v.heading, wantH, dt * 0.5);
       const distP = Math.abs(dx);
       v.speed = lerp(v.speed, engaging ? (distP > 16 ? 5.6 : 0) : 5.6, dt * 0.8);
@@ -975,7 +1051,7 @@ export class Sim {
       [nx, nz] = collideCircle(this.colliders, nx, nz, 2.6);
       v.group.position.x = nx; v.group.position.z = nz;
       v.group.rotation.y = v.heading;
-      v.model.setDrive(v.speed);
+      v.model.setDrive(v.speed, dt > 0 ? angleDelta(hBefore, v.heading) / dt : 0);
       if (v.model.turret) {
         const aim = Math.atan2(pp.x - v.pos.x, pp.z - v.pos.z);
         v.model.turret.rotation.y = -angleDelta(v.heading, aim);

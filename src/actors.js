@@ -72,24 +72,49 @@ export class Character {
       this.actions.set(short, this.mixer.clipAction(clip));
     }
     this.current = null;
+    this.onceAction = null; // active one-shot overlay (Gun_Shoot), if any
     this.play('Idle');
   }
   play(name, fade = 0.18) {
     const next = this.actions.get(name);
     if (!next || next === this.current) return;
-    next.reset().setLoop(THREE.LoopRepeat).fadeIn(fade).play();
+    // Death is a one-shot: it must fall once and STAY down. Looping it
+    // (the old behaviour) replayed the fall for the whole down-time.
+    const once = name === 'Death';
+    next.reset().setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat);
+    next.clampWhenFinished = once;
+    next.fadeIn(fade).play();
     if (this.current) this.current.fadeOut(fade);
     this.current = next;
+    // a loop switch supersedes any one-shot overlay still hanging around
+    if (this.onceAction && this.onceAction !== next) {
+      this.onceAction.fadeOut(0.1);
+      this.onceAction = null;
+    }
   }
   playOnce(name, fade = 0.08) {
     const a = this.actions.get(name);
-    if (!a) return;
+    if (!a || a === this.current) return;
+    if (this.onceAction && this.onceAction !== a) this.onceAction.fadeOut(0.05);
     a.reset().setLoop(THREE.LoopOnce).setEffectiveWeight(0.9).fadeIn(fade).play();
     a.clampWhenFinished = true;
-    // blend back to whatever loop was running
-    if (this.current && this.current !== a) this.current.reset().fadeIn(0.25).play();
+    this.onceAction = a;
+    // The running loop is NOT touched: the old code reset() it, which
+    // restarted the walk/run cycle from frame zero on every shot (a
+    // visible pop), and the finished one-shot was never faded out, so
+    // its clamped final frame (arm out, shooting) blended at 0.9 weight
+    // over every later animation forever. update() releases it instead.
   }
-  update(dt) { this.mixer.update(dt); }
+  update(dt) {
+    this.mixer.update(dt);
+    // Release a finished one-shot overlay: fade it out so the character
+    // returns fully to the running loop (idle/walk/run).
+    const a = this.onceAction;
+    if (a && (!a.isRunning() || a.time >= a.getClip().duration - 1e-4)) {
+      a.fadeOut(0.15);
+      this.onceAction = null;
+    }
+  }
   get position() { return this.group.position; }
 }
 
@@ -283,9 +308,13 @@ export class TankModel {
     }
     this.mode = '';
   }
-  /** speed > 0.3 forward, < -0.3 reverse, else idle tracks. */
-  setDrive(speed) {
-    const want = speed > 0.3 ? 'Tank_Forward' : speed < -0.3 ? 'Tank_Backwards' : '';
+  /** speed > 0.3 forward, < -0.3 reverse; pivoting in place plays the
+   *  turning-track clips (they ship in the GLB but were never used, so a
+   *  stationary turn — a column swinging toward the player — used to
+   *  rotate on frozen tracks). turn > 0 = turning left, < 0 = right. */
+  setDrive(speed, turn = 0) {
+    const want = speed > 0.3 ? 'Tank_Forward' : speed < -0.3 ? 'Tank_Backwards'
+      : turn > 0.05 ? 'Tank_TurningLeft' : turn < -0.05 ? 'Tank_TurningRight' : '';
     if (want === this.mode) return;
     for (const a of this.clips.values()) a.fadeOut(0.2);
     if (want && this.clips.get(want)) this.clips.get(want).reset().fadeIn(0.2).play();
