@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EMBER TIDE — Port Saraya</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#170c12;
+    font-family:"Avenir Next","Segoe UI",system-ui,-apple-system,sans-serif; }
+  #app { position:fixed; inset:0; }
+  #app canvas { display:block; }
+  .hidden { display:none !important; }
+
+  /* ---------- shared panel look ---------- */
+  .panel { background:linear-gradient(160deg, rgba(7,17,23,.86), rgba(7,13,18,.68));
+    border:1px solid rgba(23,195,195,.38); border-radius:10px;
+    box-shadow:0 4px 18px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06); }
+
+  /* ---------- HUD ---------- */
+  #hud { position:fixed; inset:0; pointer-events:none; color:#eaf6f6; }
+  #mission { position:absolute; top:18px; left:18px; width:318px; padding:12px 14px 11px; }
+  #mission .tag { font-size:10px; font-weight:700; letter-spacing:.22em; color:#17c3c3; }
+  #mission .title { font-size:23px; font-weight:800; letter-spacing:.04em; color:#ffb347;
+    margin:2px 0 5px; text-shadow:0 2px 8px rgba(0,0,0,.5); }
+  #mission .obj { font-size:12.5px; line-height:1.45; color:#dceef2; }
+  #mission .obj b { color:#ffd98a; }
+  #mission .next { margin-top:7px; font-size:11.5px; font-weight:700; color:#8ef0e6; }
+  #mission .prog { margin-top:9px; height:5px; border-radius:3px; background:rgba(255,255,255,.14); overflow:hidden; }
+  #mission .prog span { display:block; height:100%; width:0%; background:linear-gradient(90deg,#ff8c42,#ffb347); border-radius:3px; }
+  #mission .sub { margin-top:5px; font-size:10px; letter-spacing:.14em; color:#9fc6cc; font-weight:600; }
+  #loc { position:absolute; top:16px; left:50%; transform:translateX(-50%); text-align:center;
+    text-shadow:0 2px 10px rgba(0,0,0,.65); }
+  #locName { font-size:19px; font-weight:800; letter-spacing:.34em; color:#fff; }
+  #locSub { display:block; margin-top:2px; font-size:9.5px; font-weight:700; letter-spacing:.3em; color:#ffd98a; }
+  #tr { position:absolute; top:18px; right:18px; text-align:right; }
+  #money { font-size:30px; font-weight:800; color:#7de08a; text-shadow:0 2px 10px rgba(0,0,0,.6); }
+  #clockrow { margin-top:1px; display:flex; gap:12px; justify-content:flex-end; align-items:center; }
+  #clock { font-size:15px; font-weight:700; color:#fff; letter-spacing:.12em; }
+  #wanted { font-size:17px; color:#ffb347; letter-spacing:.14em; text-shadow:0 2px 8px rgba(0,0,0,.6); }
+  #wanted .off { color:rgba(255,255,255,.22); }
+  #heat { display:none; margin-top:6px; padding:3px 9px; border-radius:5px;
+    background:rgba(160,30,30,.6); border:1px solid rgba(255,110,90,.65);
+    font-size:10px; font-weight:800; letter-spacing:.16em; color:#ffd9d2; }
+  #side { position:absolute; top:150px; right:18px; width:198px; display:flex; flex-direction:column; gap:9px; }
+  #weapon { padding:9px 12px; display:flex; align-items:center; gap:11px; }
+  #weapon .wname { font-size:12px; font-weight:800; letter-spacing:.12em; color:#fff; }
+  #weapon .wammo { font-size:16px; font-weight:800; color:#ffb347; }
+  #weapon .wammo span { color:#9fc6cc; font-size:12px; }
+  #weapon .wlab { font-size:9px; letter-spacing:.16em; color:#9fc6cc; font-weight:700; }
+  .crew { padding:7px 11px; display:flex; flex-direction:column; gap:6px; }
+  .mate { display:flex; align-items:center; gap:9px; }
+  .avatar { width:30px; height:30px; border-radius:50%; flex:0 0 30px; display:flex; align-items:center;
+    justify-content:center; font-size:13px; font-weight:800; color:#08222b; border:2px solid rgba(255,255,255,.35); }
+  .mate .who { flex:1; min-width:0; }
+  .mate .nm { font-size:11.5px; font-weight:800; letter-spacing:.06em; color:#fff; }
+  .mate .rl { font-size:9px; letter-spacing:.14em; color:#9fc6cc; font-weight:700; }
+  .mate .st { font-size:9.5px; color:#bfe9c8; white-space:nowrap; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; vertical-align:1px; }
+  #bl { position:absolute; left:18px; bottom:18px; display:flex; flex-direction:column; gap:9px; }
+  #mapwrap { width:178px; height:178px; border-radius:12px; overflow:hidden; position:relative;
+    border:1px solid rgba(23,195,195,.45); box-shadow:0 4px 18px rgba(0,0,0,.5); background:#0d1b21; }
+  #minimap { width:178px; height:178px; display:block; }
+  #mapN { position:absolute; top:5px; right:8px; font-size:11px; font-weight:800; color:#ffd98a; text-shadow:0 1px 4px #000; }
+  #bars { width:158px; padding:8px 10px 9px; }
+  .bar { margin-top:5px; } .bar:first-child { margin-top:0; }
+  .bar .lab { display:flex; justify-content:space-between; font-size:9px; font-weight:800; letter-spacing:.18em; color:#cfe8ec; }
+  .bar .track { margin-top:3px; height:7px; border-radius:4px; background:rgba(255,255,255,.13); overflow:hidden; }
+  .bar .fill { display:block; height:100%; border-radius:4px; }
+  #dialog { position:absolute; bottom:18px; left:50%; transform:translateX(-50%); width:560px; max-width:72vw;
+    padding:11px 16px 12px 13px; display:flex; gap:12px; align-items:flex-start; }
+  #dialog .avatar { width:38px; height:38px; flex-basis:38px; font-size:16px; }
+  #dialog .nm { font-size:11px; font-weight:800; letter-spacing:.2em; color:#ffb347; }
+  #dialog .tx { margin-top:2px; font-size:14.5px; line-height:1.4; color:#f2f8f9; }
+  #speedo { position:absolute; right:18px; bottom:18px; width:158px; padding:10px 13px 11px; text-align:right; }
+  #speedVal { font-size:46px; font-weight:800; color:#fff; line-height:.95; text-shadow:0 2px 10px rgba(0,0,0,.6); }
+  #speedo .sunit { font-size:10px; font-weight:800; letter-spacing:.22em; color:#ffb347; margin-top:2px; }
+  #speedo .scar { font-size:9.5px; font-weight:700; letter-spacing:.12em; color:#cfe8ec; margin-top:5px; }
+  #speedo .sbar { height:5px; border-radius:3px; background:rgba(255,255,255,.14); overflow:hidden; margin-top:6px; }
+  #speedo .sbar span { display:block; height:100%; background:linear-gradient(90deg,#ff8c42,#ff5348); border-radius:3px; }
+  #speedo .slab2 { font-size:8.5px; font-weight:700; letter-spacing:.14em; color:#9fc6cc; margin-top:4px; }
+  #vig { position:absolute; inset:0; background:radial-gradient(ellipse at 50% 42%, transparent 55%, rgba(10,4,10,.42) 100%); }
+  #banner { position:absolute; top:26%; left:50%; transform:translateX(-50%); text-align:center; width:90vw; }
+  #banner .big { font-size:52px; font-weight:900; letter-spacing:.18em; color:#ffb347;
+    text-shadow:0 4px 24px rgba(0,0,0,.8); }
+  #banner .small { margin-top:6px; font-size:15px; font-weight:700; letter-spacing:.24em; color:#f2f8f9;
+    text-shadow:0 2px 10px rgba(0,0,0,.8); }
+  #toast { position:absolute; bottom:118px; left:50%; transform:translateX(-50%); padding:7px 14px;
+    font-size:13px; font-weight:700; letter-spacing:.06em; color:#fff; white-space:nowrap; }
+  #cross { position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px 0 0 -3px; border-radius:50%;
+    background:rgba(255,255,255,.85); box-shadow:0 0 6px rgba(0,0,0,.8); }
+
+  /* ---------- overlays: loading / menu / pause ---------- */
+  .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:#f2f8f9; text-align:center; z-index:30; }
+  #loading { background:linear-gradient(180deg,#2b1030 0%, #57291d 55%, #8a4a24 100%); }
+  #loading .lt { font-size:15px; letter-spacing:.3em; font-weight:700; color:#ffd98a; margin-top:14px; }
+  #loadbar { width:320px; height:6px; border-radius:3px; background:rgba(255,255,255,.16); margin-top:16px; overflow:hidden; }
+  #loadfill { height:100%; width:0%; background:linear-gradient(90deg,#ff8c42,#ffb347); }
+  #menu { background:linear-gradient(180deg, rgba(23,8,18,.25) 0%, rgba(23,8,18,.62) 78%, rgba(10,4,10,.88) 100%); }
+  .logo { font-size:76px; font-weight:900; letter-spacing:.1em; line-height:.95; color:#fff;
+    text-shadow:0 6px 34px rgba(0,0,0,.75); }
+  .logo .tide { color:#17c3c3; }
+  .tagline { margin-top:10px; font-size:14px; font-weight:700; letter-spacing:.3em; color:#ffd98a;
+    text-shadow:0 2px 10px rgba(0,0,0,.8); }
+  .menubtns { margin-top:38px; display:flex; flex-direction:column; gap:12px; pointer-events:auto; }
+  .mbtn { min-width:280px; padding:13px 22px; font-size:16px; font-weight:800; letter-spacing:.18em;
+    color:#08222b; background:linear-gradient(90deg,#ffb347,#ff8c42); border:0; border-radius:9px; cursor:pointer;
+    box-shadow:0 6px 22px rgba(0,0,0,.5); }
+  .mbtn.alt { background:rgba(7,17,23,.8); color:#eaf6f6; border:1px solid rgba(23,195,195,.5); }
+  .mbtn:hover { filter:brightness(1.1); }
+  .mbtn:disabled { opacity:.38; cursor:default; filter:none; }
+  .controls { margin-top:34px; font-size:12.5px; line-height:1.75; color:#cfe8ec; letter-spacing:.05em;
+    text-shadow:0 1px 6px rgba(0,0,0,.9); }
+  .controls b { color:#ffd98a; }
+  .credits { position:absolute; bottom:14px; width:100%; font-size:10.5px; letter-spacing:.14em; color:rgba(230,245,245,.55); }
+  #pause { background:rgba(8,5,10,.72); }
+  #pause .pt { font-size:40px; font-weight:900; letter-spacing:.22em; color:#fff; }
+  #status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" class="hidden">
+  <div class="panel" id="mission">
+    <div class="tag" id="missionTag">FREE ROAM</div>
+    <div class="title" id="missionTitle">PORT SARAYA</div>
+    <div class="obj" id="missionObj">Golden hour over the bay. The crew is waiting on you, Raka.</div>
+    <div class="next" id="missionNext"></div>
+    <div class="prog"><span id="missionProg"></span></div>
+    <div class="sub" id="missionSub"></div>
+  </div>
+  <div id="loc"><span id="locName">JALAN OMBAK</span><span id="locSub">SARAYA STRAND · PORT SARAYA</span></div>
+  <div id="tr">
+    <div id="money">$0</div>
+    <div id="clockrow"><span id="clock">17:42</span><span id="wanted"></span></div>
+    <div id="heat">MILITARY RESPONSE</div>
+  </div>
+  <div id="side">
+    <div class="panel" id="weapon">
+      <svg width="40" height="26" viewBox="0 0 40 26" aria-hidden="true"><path d="M3 8 L26 8 L28 4 L33 4 L33 8 L37 9 L37 13 L28 13 L27 18 L21 18 L22 13 L12 13 L11 20 L5 20 L6 13 L3 13 Z" fill="#dfe9ec"/></svg>
+      <div>
+        <div class="wname" id="wname">FISTS</div>
+        <div class="wammo" id="wammo"></div>
+        <div class="wlab" id="wlab">UNARMED</div>
+      </div>
+    </div>
+    <div class="panel crew" id="crew"></div>
+  </div>
+  <div id="bl">
+    <div id="mapwrap"><canvas id="minimap" width="356" height="356"></canvas><div id="mapN">N</div></div>
+    <div class="panel" id="bars">
+      <div class="bar"><div class="lab"><span>HEALTH</span><span id="hpVal">100</span></div>
+        <div class="track"><span class="fill" id="hpFill" style="width:100%;background:linear-gradient(90deg,#3fae5a,#7de08a)"></span></div></div>
+      <div class="bar"><div class="lab"><span>ARMOUR</span><span id="arVal">0</span></div>
+        <div class="track"><span class="fill" id="arFill" style="width:0%;background:linear-gradient(90deg,#2e7fc2,#6fc3ff)"></span></div></div>
+    </div>
+  </div>
+  <div class="panel hidden" id="dialog">
+    <div class="avatar" id="dialogAvatar">M</div>
+    <div><div class="nm" id="dialogName">MIRA — FIXER</div><div class="tx" id="dialogText"></div></div>
+  </div>
+  <div class="panel hidden" id="speedo">
+    <div id="speedVal">0</div>
+    <div class="sunit">KM / H</div>
+    <div class="scar" id="speedCar">SEDAN</div>
+    <div class="sbar"><span id="speedBar"></span></div>
+    <div class="slab2" id="speedSub">PAINTWORK 100%</div>
+  </div>
+  <div id="banner" class="hidden"><div class="big" id="bannerBig"></div><div class="small" id="bannerSmall"></div></div>
+  <div class="panel hidden" id="toast"></div>
+  <div id="cross" class="hidden"></div>
+  <div id="vig"></div>
+</div>
+
+<div id="loading" class="screen">
+  <div class="logo">EMBER <span class="tide">TIDE</span></div>
+  <div class="lt" id="loadmsg">ROLLING INTO PORT SARAYA…</div>
+  <div id="loadbar"><div id="loadfill"></div></div>
+</div>
+
+<div id="menu" class="screen hidden">
+  <div class="logo">EMBER <span class="tide">TIDE</span></div>
+  <div class="tagline">PORT SARAYA · SEVEN DAYS TO THE AUCTION</div>
+  <div class="menubtns">
+    <button class="mbtn" id="btnNew">NEW GAME</button>
+    <button class="mbtn alt" id="btnContinue">CONTINUE</button>
+  </div>
+  <div class="controls">
+    <b>WASD / ←↑↓→</b> move &amp; drive &nbsp;·&nbsp; <b>SHIFT</b> run &nbsp;·&nbsp; <b>E</b> enter / exit vehicle<br>
+    <b>MOUSE</b> aim &nbsp;·&nbsp; <b>CLICK / F</b> shoot &nbsp;·&nbsp; <b>SPACE</b> tank gun / jet afterburner<br>
+    <b>1 / 2</b> pistol · carbine &nbsp;·&nbsp; <b>P / ESC</b> pause &nbsp;·&nbsp; jet: <b>W/S</b> throttle, <b>&darr;</b> pull up
+  </div>
+  <div class="credits">A FICTIONAL CITY · ALL NAMES INVENTED · MODELS: QUATERNIUS (CC0) · ENGINE: THREE.JS (MIT)</div>
+</div>
+
+<div id="pause" class="screen hidden">
+  <div class="pt">PAUSED</div>
+  <div class="menubtns">
+    <button class="mbtn" id="btnResume">RESUME</button>
+    <button class="mbtn alt" id="btnRestart">RESTART MISSION</button>
+    <button class="mbtn alt" id="btnQuit">QUIT TO TITLE</button>
+  </div>
+</div>
+
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
