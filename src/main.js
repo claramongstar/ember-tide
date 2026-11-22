@@ -124,8 +124,8 @@ addEventListener('keydown', (e) => {
   }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
-addEventListener('mousedown', (e) => { if (mode === 'play' && e.button === 0) { fireHeld = true; firePressedEdge = true; } });
-addEventListener('mouseup', (e) => { if (e.button === 0) fireHeld = false; });
+addEventListener('mousedown', (e) => { if (!TOUCH_UI && mode === 'play' && e.button === 0) { fireHeld = true; firePressedEdge = true; } });
+addEventListener('mouseup', (e) => { if (!TOUCH_UI && e.button === 0) fireHeld = false; });
 addEventListener('mousemove', (e) => {
   if (mode !== 'play' || document.pointerLockElement !== renderer.domElement) return;
   camYaw -= e.movementX * 0.0031;
@@ -133,6 +133,7 @@ addEventListener('mousemove', (e) => {
   mouseIdle = 0;
 });
 renderer.domElement.addEventListener('click', () => {
+  if (TOUCH_UI) return; // no pointer lock on a phone; taps belong to the touch UI
   if (mode === 'play' && document.pointerLockElement !== renderer.domElement) {
     renderer.domElement.requestPointerLock();
   }
@@ -147,29 +148,136 @@ function readInput() {
   // camera-relative ground movement
   const fx = Math.sin(camYaw), fz = Math.cos(camYaw);
   const rx = Math.cos(camYaw), rz = -Math.sin(camYaw);
-  const moveX = fx * (fwd - back) + rx * (right - left);
-  const moveZ = fz * (fwd - back) + rz * (right - left);
+  let moveX = fx * (fwd - back) + rx * (right - left);
+  let moveZ = fz * (fwd - back) + rz * (right - left);
+  let throttle = fwd - back;
+  let steer = left - right;
+  let run = k('ShiftLeft') || k('ShiftRight');
+  // Round 4 touch: the analog stick folds into the same channels the keys
+  // feed — camera-relative move vector (magnitude preserved, so a gentle
+  // push walks slowly), throttle/steer for vehicles, and a push past 0.85
+  // reads as holding Shift (run). touchState is all-zero unless a stick
+  // is live, so keyboard/mouse play is bit-identical.
+  const ts = touchState;
+  if (ts.mag > 0.12) {
+    moveX = fx * -ts.y + rx * ts.x;
+    moveZ = fz * -ts.y + rz * ts.x;
+    throttle = -ts.y;
+    steer = -ts.x;
+    if (ts.mag > 0.85) run = true;
+  }
   const inJet = sim && sim.player && sim.player.vehicle && sim.player.vehicle.kind === 'jet';
   const input = {
     moveX, moveZ,
     jump: k('Space'),   // on foot only; vehicles read Space via burner/firePressed below
-    run: k('ShiftLeft') || k('ShiftRight'),
-    throttle: fwd - back,
-    steer: left - right,
+    run,
+    throttle,
+    steer,
     interact: interactEdge,
     fire: fireHeld || k('KeyF'),
     firePressed: firePressedEdge || fireHeld,
     turretYaw: camYaw,
     aimOrigin: camera.position.clone(),
     aimDir: camera.getWorldDirection(new THREE.Vector3()),
-    jetThrottle: inJet ? (k('KeyW') ? 1 : k('KeyS') ? -1 : 0) : 0,
-    pitchUp: k('ArrowDown'),
-    pitchDown: k('ArrowUp'),
-    burner: k('Space'),
+    jetThrottle: inJet ? (k('KeyW') ? 1 : k('KeyS') ? -1 : (ts.mag > 0.12 ? -ts.y : 0)) : 0,
+    pitchUp: k('ArrowDown') || (inJet && ts.y > 0.55),
+    pitchDown: k('ArrowUp') || (inJet && ts.y < -0.55),
+    burner: k('Space') || ts.fire,
   };
+  // Round 4 touch aim: no pointer lock on a phone, so while FIRE is held
+  // the shot goes where Raka faces — the stick's direction while it is
+  // pushed (movement turns him that way regardless), else his current
+  // heading. The tank turret follows the same heading for the same reason.
+  if (ts.fire && sim && sim.player) {
+    const pp = sim.playerPos();
+    const veh = sim.player.vehicle;
+    const hd = ts.mag > 0.12 ? Math.atan2(moveX, moveZ) : (veh ? veh.heading : sim.player.heading);
+    input.aimOrigin = new THREE.Vector3(pp.x, 1.4, pp.z);
+    input.aimDir = new THREE.Vector3(Math.sin(hd), 0, Math.cos(hd));
+    input.turretYaw = hd;
+  }
   interactEdge = false;
   firePressedEdge = false;
   return input;
+}
+
+// ------------------------------------------------------- touch input --
+// Round 4: mobile controls for the owner's phone. Nothing here is a
+// parallel input path: the stick and buttons write into the very state
+// readInput() already consumes — the `keys` set, the fireHeld /
+// firePressedEdge / interactEdge flags — plus `touchState`, the analog
+// channel readInput() folds in only while a touch is live. The UI is
+// wired only on touch hardware and never in ?shot= mode, so desktop play
+// and the staged frames stay exactly as shipped. With no mouse to idle,
+// the camera's existing idle-settle keeps it behind Raka / his vehicle.
+const TOUCH_UI = !SHOT && (('ontouchstart' in window)
+  || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
+const touchState = { x: 0, y: 0, mag: 0, fire: false };
+const touchUiEl = TOUCH_UI ? $('touchui') : null;
+function syncTouchUi() {
+  if (touchUiEl) touchUiEl.classList.toggle('hidden', mode !== 'play');
+}
+if (TOUCH_UI) {
+  document.body.classList.add('touch');
+  const stickEl = $('stick'), knobEl = $('knob');
+  const STICK_TRAVEL = 40; // px of knob travel for full deflection
+  let stickId = null, stickCx = 0, stickCy = 0;
+  const setStick = (dx, dy) => {
+    touchState.x = dx / STICK_TRAVEL;
+    touchState.y = dy / STICK_TRAVEL;
+    touchState.mag = Math.min(1, Math.hypot(touchState.x, touchState.y));
+    knobEl.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  };
+  const stickTouch = (t) => {
+    let dx = t.clientX - stickCx, dy = t.clientY - stickCy;
+    const d = Math.hypot(dx, dy);
+    if (d > STICK_TRAVEL) { dx *= STICK_TRAVEL / d; dy *= STICK_TRAVEL / d; }
+    setStick(dx, dy);
+  };
+  stickEl.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (stickId !== null) return;
+    const t = e.changedTouches[0];
+    stickId = t.identifier;
+    const r = stickEl.getBoundingClientRect();
+    stickCx = r.left + r.width / 2; stickCy = r.top + r.height / 2;
+    stickTouch(t);
+  }, { passive: false });
+  stickEl.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) if (t.identifier === stickId) stickTouch(t);
+  }, { passive: false });
+  const stickEnd = (e) => {
+    for (const t of e.changedTouches) if (t.identifier === stickId) {
+      stickId = null; setStick(0, 0);
+    }
+  };
+  stickEl.addEventListener('touchend', stickEnd);
+  stickEl.addEventListener('touchcancel', stickEnd);
+  // Buttons: press/release set the same flags the mouse and keys set.
+  // Touches are tracked per element, so one thumb can hold the stick
+  // while the other works the buttons (multi-touch).
+  const bindBtn = (id, down, up) => {
+    const el = $(id);
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); el.classList.add('on'); down(); }, { passive: false });
+    const end = (e) => { e.preventDefault(); el.classList.remove('on'); if (up) up(); };
+    el.addEventListener('touchend', end);
+    el.addEventListener('touchcancel', end);
+  };
+  bindBtn('btnFire',
+    () => { fireHeld = true; firePressedEdge = true; touchState.fire = true; },
+    () => { fireHeld = false; touchState.fire = false; });
+  bindBtn('btnJump', () => keys.add('Space'), () => keys.delete('Space'));
+  bindBtn('btnAct', () => { interactEdge = true; });
+  bindBtn('btnWep', () => { // cycle like the 1/2 keys, skipping empty guns
+    if (mode !== 'play' || !sim || !sim.player) return;
+    const p = sim.player, order = ['fists', 'pistol', 'carbine'];
+    for (let i = 1; i <= 3; i++) {
+      const w = order[(order.indexOf(p.weapon) + i) % 3];
+      if (w === 'fists' || p.ammo[w] > 0) { p.weapon = w; break; }
+    }
+  });
+  bindBtn('btnPause', () => { if (mode === 'play') pauseGame(); });
 }
 
 // ------------------------------------------------------------ camera --
@@ -223,6 +331,7 @@ function updateCamera(dt) {
 // ------------------------------------------------------------ flow --
 function startPlay(fromSave) {
   mode = 'play';
+  syncTouchUi();
   $('menu').classList.add('hidden');
   $('loading').classList.add('hidden');
   hud.show();
@@ -248,6 +357,7 @@ function startPlay(fromSave) {
 function pauseGame() {
   if (mode !== 'play') return;
   mode = 'pause';
+  syncTouchUi();
   $('pause').classList.remove('hidden');
   if (document.pointerLockElement) document.exitPointerLock();
   saveGame();
@@ -255,6 +365,7 @@ function pauseGame() {
 function resumeGame() {
   if (mode !== 'pause') return;
   mode = 'play';
+  syncTouchUi();
   $('pause').classList.add('hidden');
 }
 function onPlayerDead() {
