@@ -230,17 +230,38 @@ function readInput() {
     pitchDown: k('ArrowUp') || (inJet && ts.y < -0.55),
     burner: k('Space') || ts.fire,
   };
-  // Round 4 touch aim: no pointer lock on a phone, so while FIRE is held
-  // the shot goes where Raka faces — the stick's direction while it is
-  // pushed (movement turns him that way regardless), else his current
-  // heading. The tank turret follows the same heading for the same reason.
+  // Round 4 touch aim REPLACED by round 10: FIRE used to override the
+  // shot's origin/direction with Raka's body heading, so bullets flew
+  // along his chest line instead of the crosshair and fanned as he
+  // turned (owner: shots "ke luar kemana-mana", nothing could be hit).
+  // The tank turret still follows Raka's heading on a phone, since
+  // there is no pointer lock to swing it with.
+  //
+  // Round 10 touch aim — a LEVEL ray, not the camera's centre ray.
+  // A mouse player pitches the camera (camPitch is mouse-only), so on
+  // desktop the screen-centre ray is a real aim input and play.js
+  // converges the bullet onto it. A phone has NO pitch input at all:
+  // camPitch stays at the 0.32 framing default forever, the centre
+  // ray dives ~0.23/m and hits the dirt ~20 m out — measured with a
+  // target dead ahead at 15 m, the crosshair ray strikes the ground
+  // in front of him (2.26 m from his chest), so no centred target
+  // beyond ~10 m can ever be hit. The only aim a phone player
+  // actually controls is the camera's horizontal bearing, so the
+  // touch aim ray is that bearing levelled at chest height, starting
+  // over the camera's ground track (the line the screen centre
+  // tracks, shoulder offset included). play.js then flies the bullet
+  // from the muzzle to the point that ray picks, with the same wall
+  // cap, target snap and occlusion as the mouse. This is not round
+  // 4's rule: that aimed along the BODY, which points along the
+  // strafe while the camera — and the player's eyes — face forward.
+  // The camera yaw is what the player sees, and updateCamera only
+  // re-aims it while he moves; standing and firing, it never drifts.
   if (ts.fire && sim && sim.player) {
-    const pp = sim.playerPos();
     const veh = sim.player.vehicle;
     const hd = ts.mag > 0.12 ? Math.atan2(moveX, moveZ) : (veh ? veh.heading : sim.player.heading);
-    input.aimOrigin = new THREE.Vector3(pp.x, 1.4, pp.z);
-    input.aimDir = new THREE.Vector3(Math.sin(hd), 0, Math.cos(hd));
     input.turretYaw = hd;
+    input.aimOrigin = new THREE.Vector3(camera.position.x, veh ? 1.15 : 1.35, camera.position.z);
+    input.aimDir = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
   }
   interactEdge = false;
   firePressedEdge = false;
