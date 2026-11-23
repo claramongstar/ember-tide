@@ -130,6 +130,23 @@
   body.touch #speedo { bottom:200px; }
   body.touch #dialog { bottom:200px; }
   body.touch #toast { bottom:212px; }
+  /* Round 10: on a short landscape phone screen the mission card's
+     bottom edge reached into the joystick zone and the stick sat on
+     the card's last line — the "JOB n OF 5 · dist" line was unreadable
+     under the knob. On touch the card becomes a flex column with the
+     JOB line moved up under the tag (the two metadata lines together
+     at the top of the card, far above the stick), the card is slightly
+     tightened, and its height is capped so its bottom edge stays above
+     the joystick zone. Desktop keeps the shipped block layout. */
+  body.touch #mission { display:flex; flex-direction:column; top:12px; left:12px; width:300px;
+    padding:10px 12px 9px; max-height:calc(100vh - 170px); max-height:calc(100dvh - 170px); overflow:hidden; }
+  body.touch #mission > * { flex:none; }
+  body.touch #mission .tag { order:0; }
+  body.touch #mission .sub { order:1; margin-top:2px; }
+  body.touch #mission .title { order:2; font-size:20px; }
+  body.touch #mission .obj { order:3; line-height:1.38; }
+  body.touch #mission .next { order:4; }
+  body.touch #mission .prog { order:5; }
 
   /* ---------- overlays: loading / menu / pause ---------- */
   .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
