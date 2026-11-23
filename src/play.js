@@ -1221,6 +1221,29 @@ export class Sim {
   }
 
   // ------------------------------------------------------------- combat --
+  // Distance along the 2D ray (ox,oz) + t*(dx,dz) at which a building
+  // first blocks it, or maxT when the way is clear. segmentBlocked is a
+  // slab test over the segment, so march in coarse steps and refine the
+  // first blocked step once — a few dozen box tests per shot, not a
+  // per-frame cost. (Round 10: shots need real wall distances, not the
+  // old boolean that only shortened a whiffed shot to half range.)
+  _wallDist(ox, oz, dx, dz, maxT) {
+    const los = this.world.los;
+    let prev = 0;
+    for (let t = 1.5; t <= maxT; t += 1.5) {
+      if (segmentBlocked(los, ox, oz, ox + dx * t, oz + dz * t)) {
+        let lo = prev, hi = t;
+        for (let i = 0; i < 5; i++) {
+          const mid = (lo + hi) / 2;
+          if (segmentBlocked(los, ox, oz, ox + dx * mid, oz + dz * mid)) hi = mid; else lo = mid;
+        }
+        return lo;
+      }
+      prev = t;
+    }
+    return maxT;
+  }
+
   _playerShoot(input, fromVehicle = null) {
     const p = this.player;
     const w = p.weapon;
@@ -1228,49 +1251,85 @@ export class Sim {
     if (p.ammo[w] <= 0) { p.fireCd = 0.3; this.events.emit('toast', 'OUT OF AMMO — Dario sells shells at the workshop'); return; }
     p.ammo[w]--;
     p.fireCd = cfg.cd;
-    const origin = input.aimOrigin || new THREE.Vector3(p.char.position.x, 1.4, p.char.position.z);
-    const dir = input.aimDir || new THREE.Vector3(Math.sin(p.heading), 0, Math.cos(p.heading));
-    const from = origin.clone().add(dir.clone().multiplyScalar(0.5));
-    this.flash(from, 1.1);
-    if (!fromVehicle) p.char.playOnce('Gun_Shoot');
-    // nearest hit among peds and vehicles along the ray (t = distance along
-    // the ray to the closest approach; the perpendicular gap must be small)
-    let bestT = cfg.range, bestPed = null, bestVeh = null;
-    const dirN = dir.clone().normalize();
-    const along = (c) => {
-      const to = new THREE.Vector3().subVectors(c, origin);
-      const t = to.dot(dirN);
-      if (t < 0.5) return -1;
-      const perp = to.addScaledVector(dirN, -t).length();
+    // Round 10 — shots go where the player is AIMING, on every input.
+    // input.aimOrigin / aimDir only pick the point being looked at;
+    // the bullet itself leaves Raka's gun and flies to that point.
+    // On desktop the ray is the camera's screen-centre ray (the mouse
+    // pitches it onto the target). On touch it is the camera's bearing
+    // levelled at chest height — a phone has no pitch input, so the
+    // centre ray stays nose-down and can never be centred past ~10 m;
+    // see readInput() in main.js. Before this, touch FIRE replaced
+    // the aim ray with Raka's body heading, so aimed shots missed and
+    // fanned as he turned (owner: "peluru ke luar kemana-mana").
+    const pp = fromVehicle ? fromVehicle.pos : p.char.position;
+    const muzzle = new THREE.Vector3(pp.x, fromVehicle ? 1.15 : 1.35, pp.z);
+    const camO = input.aimOrigin || muzzle.clone();
+    const camD = (input.aimDir || new THREE.Vector3(Math.sin(p.heading), 0, Math.cos(p.heading))).clone().normalize();
+    const alongFrom = (o, d, c) => {
+      const to = new THREE.Vector3().subVectors(c, o);
+      const t = to.dot(d);
+      if (t < 0.5) return null;
+      const perp = to.addScaledVector(d, -t).length();
       return { t, perp };
     };
+    // (1) What is under the crosshair? Buildings and the ground cap the
+    // aim distance first; then the ped / vehicle the centre ray passes
+    // closest to (within a generous acquisition radius) is snapped to —
+    // the bullet flies at its chest, so dot-on-target is a hit, not a
+    // near miss decided by parallax.
+    let aimT = this._wallDist(camO.x, camO.z, camD.x, camD.z, cfg.range);
+    if (camD.y < -0.001) {
+      const gt = (0.02 - camO.y) / camD.y;   // where the ray meets the ground
+      if (gt > 0.5 && gt < aimT) aimT = gt;
+    }
+    let aimPoint = null, aimPerp = Infinity;
     for (const ped of this.peds) {
       if (ped.state === 'down') continue;
       const c = new THREE.Vector3(ped.char.position.x, 1.05, ped.char.position.z);
-      const r = along(c);
+      const r = alongFrom(camO, camD, c);
+      if (r && r.t < aimT && r.perp < 0.9 && r.perp < aimPerp) { aimPerp = r.perp; aimPoint = c; }
+    }
+    for (const v of this.vehicles) {
+      if (v === fromVehicle || v.destroyed) continue;
+      const c = new THREE.Vector3(v.pos.x, v.kind === 'tank' ? 1.5 : 0.9, v.pos.z);
+      const r = alongFrom(camO, camD, c);
+      const rr = v.kind === 'tank' ? 3.4 : 2.3;
+      if (r && r.t < aimT && Math.max(0, r.perp - rr) < aimPerp && r.perp < rr + 0.4) { aimPerp = Math.max(0, r.perp - rr); aimPoint = c; }
+    }
+    if (!aimPoint) aimPoint = camO.clone().addScaledVector(camD, aimT);
+    // (2) The bullet: muzzle -> aim point, resolved with the shipped hit
+    // tolerances along that line; a building on the line stops it first.
+    const dir = aimPoint.clone().sub(muzzle);
+    const aimDist = Math.max(dir.length(), 0.001);
+    dir.normalize();
+    const from = muzzle.clone().addScaledVector(dir, 0.45);
+    this.flash(from, 1.1);
+    if (!fromVehicle) p.char.playOnce('Gun_Shoot');
+    let bestT = Math.min(cfg.range, aimDist + 0.01), bestPed = null, bestVeh = null;
+    for (const ped of this.peds) {
+      if (ped.state === 'down') continue;
+      const c = new THREE.Vector3(ped.char.position.x, 1.05, ped.char.position.z);
+      const r = alongFrom(muzzle, dir, c);
       if (r && r.perp < 0.55 && r.t < bestT) { bestT = r.t; bestPed = ped; bestVeh = null; }
     }
     for (const v of this.vehicles) {
       if (v === fromVehicle || v.destroyed) continue;
       const c = new THREE.Vector3(v.pos.x, v.kind === 'tank' ? 1.5 : 0.9, v.pos.z);
-      const r = along(c);
+      const r = alongFrom(muzzle, dir, c);
       const rr = v.kind === 'tank' ? 3.4 : 2.3;
       if (r && r.perp < rr && r.t < bestT) { bestT = r.t; bestVeh = v; bestPed = null; }
     }
-    // buildings stop the bullet
-    const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
-    if (segmentBlocked(this.world.los, origin.x, origin.z, end.x, end.z) && !bestPed && !bestVeh) {
-      bestT = cfg.range * 0.5;
-    }
-    const hitPoint = origin.clone().add(dir.clone().multiplyScalar(bestT));
+    const wallT = this._wallDist(muzzle.x, muzzle.z, dir.x, dir.z, bestT);
+    if (wallT < bestT) { bestT = wallT; bestPed = null; bestVeh = null; }
+    const hitPoint = muzzle.clone().add(dir.clone().multiplyScalar(bestT));
     this.tracer(from, hitPoint);
     if (bestPed) { this.hurtPed(bestPed, cfg.dmg * 2.2); this.crime(0.9, bestPed.char.position.x, bestPed.char.position.z); }
     else if (bestVeh) {
       this.damageVehicle(bestVeh, cfg.dmg, 'shot');
       if (bestVeh.driver === 'police' || bestVeh.kind === 'tank') this.crime(0.7, bestVeh.pos.x, bestVeh.pos.z);
       else this.crime(0.35, bestVeh.pos.x, bestVeh.pos.z);
-    } else this.crime(0.45, origin.x, origin.z);
-    this.scarePeds(origin.x, origin.z, 15);
+    } else this.crime(0.45, muzzle.x, muzzle.z);
+    this.scarePeds(muzzle.x, muzzle.z, 15);
     this.events.emit('shot', {});
   }
 
